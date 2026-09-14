@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Orquestador de Agentes</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◈</span>
+      <h1>Orquestador de Agentes</h1>
+    </div>
+    <div class="status-pill" id="statusPill">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">conectando…</span>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="tablero">Tablero</button>
+    <button class="tab-btn" data-tab="agentes">Agentes</button>
+    <button class="tab-btn" data-tab="consola">Consola</button>
+    <button class="tab-btn" data-tab="conexion">Conexión</button>
+  </nav>
+
+  <main>
+    <!-- ============ TABLERO ============ -->
+    <section id="tab-tablero" class="tab-panel active">
+      <div id="planWrap" style="display:none">
+        <div class="section-head">
+          <h2>Plan en ejecución</h2>
+          <button id="clearPlanBtn" class="btn subtle small">Cerrar plan</button>
+        </div>
+        <div class="card plan-card">
+          <h3 id="planTitle"></h3>
+          <p class="muted" id="planGoal"></p>
+          <div class="plan-progress"><div class="plan-bar" id="planBar"></div></div>
+          <div class="plan-steps" id="planSteps"></div>
+        </div>
+      </div>
+
+      <div class="section-head">
+        <h2>Agentes</h2>
+        <span class="muted" id="activeCount"></span>
+      </div>
+      <div class="agent-grid" id="agentGrid"></div>
+
+      <div class="section-head">
+        <h2>Actividad</h2>
+        <button id="clearRunsBtn" class="btn subtle small">Limpiar</button>
+      </div>
+      <div class="timeline" id="timeline">
+        <p class="muted empty">Sin actividad todavía. Las delegaciones de Claude Code aparecerán aquí en vivo.</p>
+      </div>
+    </section>
+
+    <!-- ============ AGENTES ============ -->
+    <section id="tab-agentes" class="tab-panel">
+      <div class="card">
+        <div class="row-between">
+          <h2>Definición de agentes</h2>
+          <button id="addAgentBtn" class="btn subtle small">+ Nuevo agente</button>
+        </div>
+        <p class="muted">El campo <strong>"Cuándo usarlo"</strong> es lo que Claude Code lee para decidir a qué agente delegar cada tarea. Sé específico ahí.</p>
+        <div id="agentsEditor"></div>
+        <button id="saveAgentsBtn" class="btn primary">Guardar cambios</button>
+        <span id="agentsSaved" class="saved-msg"></span>
+      </div>
+    </section>
+
+    <!-- ============ CONSOLA ============ -->
+    <section id="tab-consola" class="tab-panel">
+      <div class="card">
+        <h2>Probar un agente</h2>
+        <label>Agente</label>
+        <select id="consoleAgent"></select>
+        <label>Tarea</label>
+        <textarea id="consolePrompt" rows="6" placeholder="Escribe una tarea para probar al agente…"></textarea>
+        <button id="sendConsoleBtn" class="btn primary">Enviar</button>
+        <span id="consoleStatus" class="muted"></span>
+      </div>
+      <div class="card">
+        <h3>Respuesta</h3>
+        <pre id="consoleOutput" class="output-box">—</pre>
+      </div>
+    </section>
+
+    <!-- ============ CONEXIÓN ============ -->
+    <section id="tab-conexion" class="tab-panel">
+      <div class="card">
+        <h2>Instrucciones para Claude Code</h2>
+        <p class="muted">Pega esto en el <code>CLAUDE.md</code> de tu proyecto, o dáselo al inicio de la sesión:</p>
+        <pre id="claudeInstructions" class="output-box small-text"></pre>
+        <button id="copyInstructionsBtn" class="btn primary">Copiar instrucciones</button>
+        <span id="copiedMsg" class="saved-msg"></span>
+      </div>
+
+      <div class="card">
+        <h2>Configuración</h2>
+        <label>URL de LM Studio</label>
+        <input id="cfgLmUrl" type="text" />
+        <label>Identificador del modelo</label>
+        <input id="cfgModel" type="text" />
+        <label>Máximo de tareas en paralelo</label>
+        <input id="cfgParallel" type="number" min="1" max="8" />
+        <p class="muted">LM Studio te muestra su límite de paralelismo en la pestaña Developer. No lo excedas.</p>
+        <button id="saveConfigBtn" class="btn primary">Guardar</button>
+        <span id="configSaved" class="saved-msg"></span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Modal de detalle de run -->
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <div class="row-between">
+      <h3 id="modalTitle">Detalle</h3>
+      <button class="btn subtle small" id="closeModalBtn">Cerrar</button>
+    </div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
