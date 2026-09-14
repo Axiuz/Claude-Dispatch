@@ -1,0 +1,7 @@
+{
+  "lmstudio_url": "http://127.0.0.1:1234",
+  "model": "omnicoder-9b",
+  "app_port": 3131,
+  "max_runs_kept": 300,
+  "max_parallel": 4
+}
