@@ -4,6 +4,7 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const pty = require("node-pty");
+const { buildGraph } = require("./codegraph");
 
 const DEFAULT_DATA_DIR = path.join(__dirname, "data");
 // La app de macOS pasa ORQ_DATA_DIR para guardar los datos fuera del bundle
@@ -791,6 +792,35 @@ app.delete("/api/projects", (req, res) => {
   res.json(listProjects());
 });
 
+// ---- Mapa de código ----
+// Análisis estático de una carpeta: qué funciones hay, dónde y quién las llama.
+// Se cachea en memoria (como los runs): recorrer un repo grande cuesta segundos
+// y el grafo no cambia mientras no se edite el código.
+const GRAPH_CACHE_MS = 5 * 60 * 1000;
+const GRAPH_CACHE_MAX = 4; // un grafo grande pesa megas: no guardes muchos
+const graphCache = new Map();
+
+app.get("/api/graph", (req, res) => {
+  const dir = resolveDir(req.query.path);
+  if (!dir) return res.status(400).json({ error: "Falta el parámetro path" });
+  if (!isDirectory(dir)) return res.status(404).json({ error: "La carpeta no existe" });
+
+  const cached = graphCache.get(dir);
+  const fresh = cached && Date.now() - cached.at < GRAPH_CACHE_MS;
+  if (fresh && req.query.refresh !== "1") return res.json({ ...cached.graph, cached: true });
+
+  try {
+    const graph = buildGraph(dir);
+    graphCache.delete(dir);
+    graphCache.set(dir, { at: Date.now(), graph });
+    // Map conserva el orden de inserción: el primero es el más viejo
+    while (graphCache.size > GRAPH_CACHE_MAX) graphCache.delete(graphCache.keys().next().value);
+    touchProject(dir);
+    res.json({ ...graph, cached: false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ---- Terminal ----
 app.get("/api/terminals", (req, res) => res.json([...sessions.values()].map(sessionView)));
