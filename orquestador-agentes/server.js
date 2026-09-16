@@ -1,5 +1,4 @@
 const express = require("express");
-const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -167,7 +166,24 @@ async function runAgent({ agent, prompt, source, meta, overrides = {} }) {
 
 // ============ App ============
 const app = express();
-app.use(cors());
+
+// ---- Seguridad: solo este Mac ----
+// El servidor escucha en 127.0.0.1 (ver app.listen), así que nadie de la red
+// puede conectarse. Además rechazamos:
+// - Host ajeno: evita DNS rebinding (una web que resuelve su dominio a 127.0.0.1)
+// - Origin ajeno: evita que una página abierta en el navegador llame a la API
+// curl y Claude Code no mandan Origin; el panel manda el suyo, que es local.
+const PORT = config.app_port || 3131;
+const LOCAL_HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`]);
+app.use((req, res, next) => {
+  const host = req.get("host");
+  const origin = req.get("origin");
+  const hostOk = LOCAL_HOSTS.has(host);
+  const originOk = !origin || LOCAL_HOSTS.has(origin.replace(/^http:\/\//, ""));
+  if (hostOk && originOk) return next();
+  res.status(403).json({ error: "Solo se aceptan peticiones locales" });
+});
+
 app.use(express.json({ limit: "4mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -429,9 +445,8 @@ app.post("/api/config", (req, res) => {
   res.json(config);
 });
 
-const PORT = config.app_port || 3131;
-app.listen(PORT, () => {
-  console.log(`\n  Orquestador de Agentes → http://localhost:${PORT}\n`);
+app.listen(PORT, "127.0.0.1", () => {
+  console.log(`\n  Claude Dispatch → http://localhost:${PORT}\n`);
   console.log(`  Manifest para Claude Code: GET http://localhost:${PORT}/api/manifest`);
   console.log(`  Invocar agente:            POST http://localhost:${PORT}/agent/{id}\n`);
 });
