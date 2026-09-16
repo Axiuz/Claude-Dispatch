@@ -30,6 +30,7 @@ curl -s -X POST http://localhost:3131/api/plan \
   -d '{
     "title": "<título corto>",
     "goal": "<qué se busca lograr>",
+    "project": "<ruta absoluta del repo, la de pwd>",
     "steps": [
       {"description": "Leer y entender X", "agent": null},
       {"description": "Generar la función Y", "agent": "coder"},
@@ -41,6 +42,7 @@ curl -s -X POST http://localhost:3131/api/plan \
 ```
 
 `"agent": null` = ese paso lo haces tú. Un id de agente = lo delegas.
+`"project"` asocia el plan a su carpeta en mi lista de proyectos recientes.
 
 ### 3. Ejecución
 
@@ -121,25 +123,43 @@ Reglas de contexto:
 - Acota la tarea a una sola cosa.
 - Di explícitamente qué formato quieres de vuelta.
 
-## Qué delegar y qué no
+## Tú eres el coder principal
 
-**Delega:**
-- Funciones puras y acotadas (validadores, parsers, formateadores)
-- Tests unitarios de algo ya definido
-- Boilerplate repetitivo (CRUD, DTOs, schemas simples)
-- Docstrings y documentación de código existente
-- Segunda opinión sobre un diff
+Escribes tú el código: funciones, lógica, integración y cambios en varios archivos.
+El agente **coder** es tu refuerzo solo cuando hay demasiado código que escribir:
+- Mucho volumen mecánico y autocontenido, del orden de 150 líneas o más: CRUD de
+  varias entidades, DTOs o schemas en serie, mappers, fixtures, datos de prueba.
+- Antes de delegarlo define tú la estructura: firmas, tipos y un ejemplo del
+  patrón. El coder rellena; tú revisas e integras.
+- Si es menos que eso, o requiere entender el proyecto, lo escribes tú.
 
-**No delegues (hazlo tú):**
-- Decisiones de arquitectura o de stack
-- Cambios que tocan varios archivos con dependencias entre sí
-- Lógica de negocio del dominio
-- Integraciones con AWS, PayPal, Amplify o cualquier servicio externo
-- Cualquier cosa de seguridad: auth, JWT, manejo de credenciales
-- Migraciones de base de datos
+## Uso de agentes por defecto
 
-Ante la duda, hazlo tú. Un error del agente local me cuesta más tiempo del que
-ahorra la delegación.
+- **tester:** si escribiste o cambiaste lógica, pídele los tests unitarios de esa
+  lógica. Revísalos y ajústalos tú antes de integrarlos.
+- **reviewer:** antes de dar la tarea por terminada, mándale el diff (o las partes
+  clave si es muy grande). Valora sus observaciones; no todas serán correctas.
+- **documenter:** si hay que documentar, tú escribes el resumen de hechos (qué se
+  hizo, por qué, archivos, API) y él redacta. Tú revisas e integras.
+- **explainer:** opcional, para resumir código ajeno cuando necesites orientarte.
+
+Excepciones, las únicas válidas para saltarte un agente:
+- El cambio es trivial: menos de ~20 líneas y sin lógica nueva.
+- LM Studio no responde.
+- Te pido explícitamente no usar agentes.
+
+Si aplicas una excepción, di en una línea qué agente omites y cuál excepción es.
+
+"El agente no puede leer archivos" o "no tiene el contexto" **no** son motivos
+para no delegar: tu trabajo es leer, resumir y pasarle el contexto. Si el
+material es grande, pártelo en trozos de ~300 líneas o pásale tu resumen.
+
+Nunca delegues decisiones de arquitectura ni la implementación de seguridad,
+auth o credenciales (sí puedes pedir revisión).
+
+Las sesiones abiertas desde el panel de Claude Dispatch ya reciben estas
+instrucciones (generadas por `buildInstructions()` en `server.js`); este archivo
+es para proyectos donde abras Claude Code por fuera del panel.
 
 ## Antes de empezar
 
