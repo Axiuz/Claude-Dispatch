@@ -3,129 +3,268 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Orquestador de Agentes</title>
+<title>Claude Dispatch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/vendor/xterm/xterm.css" />
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-<div class="app">
+<div class="app" id="app">
 
-  <header class="topbar">
+  <!-- ============ CARRIL IZQUIERDO: marca, estado y proyectos ============ -->
+  <aside class="rail rail-left">
     <div class="brand">
-      <span class="logo">◈</span>
-      <h1>Orquestador de Agentes</h1>
+      <span class="logo">✳</span>
+      <h1>Claude Dispatch</h1>
     </div>
-    <div class="status-pill" id="statusPill">
+    <button class="status-pill" id="statusPill" title="Comprobar de nuevo">
       <span class="dot" id="statusDot"></span>
       <span id="statusText">conectando…</span>
+    </button>
+
+    <div class="rail-head">
+      <span class="eyebrow">PROYECTOS</span>
+      <button class="link-btn" id="addProjectBtn">+ carpeta</button>
     </div>
-  </header>
+    <div class="project-list" id="projectList"></div>
+  </aside>
 
-  <nav class="tabs">
-    <button class="tab-btn active" data-tab="tablero">Tablero</button>
-    <button class="tab-btn" data-tab="agentes">Agentes</button>
-    <button class="tab-btn" data-tab="consola">Consola</button>
-    <button class="tab-btn" data-tab="conexion">Conexión</button>
-  </nav>
+  <!-- ============ CENTRO: pestañas ============ -->
+  <main class="center">
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="tablero">Tablero</button>
+      <button class="tab-btn" data-tab="vivo">En vivo <span class="tab-count" id="liveCount"></span></button>
+      <button class="tab-btn" data-tab="sesion">Sesión <span class="tab-count" id="sessionCount"></span></button>
+      <button class="tab-btn" data-tab="mapa">Mapa</button>
+      <button class="tab-btn" data-tab="agentes">Agentes</button>
+      <button class="tab-btn" data-tab="consola">Consola</button>
+      <button class="tab-btn" data-tab="conexion">Conexión</button>
+    </nav>
 
-  <main>
     <!-- ============ TABLERO ============ -->
     <section id="tab-tablero" class="tab-panel active">
-      <div id="planWrap" style="display:none">
-        <div class="section-head">
-          <h2>Plan en ejecución</h2>
-          <button id="clearPlanBtn" class="btn subtle small">Cerrar plan</button>
+      <div id="planWrap" hidden>
+        <div class="plan-head">
+          <div class="plan-titles">
+            <div class="plan-title" id="planTitle"></div>
+            <div class="plan-goal" id="planGoal"></div>
+          </div>
+          <div class="plan-progress">
+            <div class="progress"><div class="progress-bar" id="planBar"></div></div>
+            <span class="mono muted" id="planCount"></span>
+          </div>
+          <button id="clearPlanBtn" class="btn">Cerrar plan</button>
         </div>
-        <div class="card plan-card">
-          <h3 id="planTitle"></h3>
-          <p class="muted" id="planGoal"></p>
-          <div class="plan-progress"><div class="plan-bar" id="planBar"></div></div>
-          <div class="plan-steps" id="planSteps"></div>
-        </div>
+        <div class="kanban" id="kanban"></div>
+      </div>
+
+      <div class="plan-empty" id="planEmpty">
+        <span class="plan-empty-title">Sin plan en ejecución</span>
+        <span class="plan-empty-text">Cuando Claude Code apruebe un plan y lo registre, sus pasos aparecen aquí como tarjetas y se mueven solos entre columnas.</span>
+        <span class="code-chip" id="planEndpoint"></span>
       </div>
 
       <div class="section-head">
-        <h2>Agentes</h2>
-        <span class="muted" id="activeCount"></span>
+        <span class="eyebrow">ACTIVIDAD</span>
+        <button id="clearRunsBtn" class="link-btn">Limpiar</button>
       </div>
-      <div class="agent-grid" id="agentGrid"></div>
+      <div class="timeline" id="timeline"></div>
+    </section>
 
-      <div class="section-head">
-        <h2>Actividad</h2>
-        <button id="clearRunsBtn" class="btn subtle small">Limpiar</button>
+    <!-- ============ EN VIVO: lo que escribe cada agente ============ -->
+    <section id="tab-vivo" class="tab-panel">
+      <div class="page-head">
+        <div>
+          <div class="page-title">Agentes en vivo</div>
+          <div class="page-desc">Lo que cada agente está pensando y escribiendo, token a token. Las últimas respuestas se quedan aquí hasta que empiecen tareas nuevas.</div>
+        </div>
       </div>
-      <div class="timeline" id="timeline">
-        <p class="muted empty">Sin actividad todavía. Las delegaciones de Claude Code aparecerán aquí en vivo.</p>
+      <div class="plan-empty live-empty" id="liveEmpty">
+        <span class="plan-empty-title">Ningún agente trabajando</span>
+        <span class="plan-empty-text">Cuando Claude Code delegue una tarea (o la pruebes desde Consola), verás aquí la respuesta mientras se escribe.</span>
+      </div>
+      <div class="live-grid" id="liveGrid"></div>
+    </section>
+
+    <!-- ============ SESIÓN (terminal con Claude Code) ============ -->
+    <section id="tab-sesion" class="tab-panel">
+      <div class="session-empty" id="sessionEmpty">
+        <span class="plan-empty-title">Sin sesión abierta</span>
+        <span class="plan-empty-text">Abre un proyecto del carril izquierdo: se inicia Claude Code dentro de esa carpeta y lo usas aquí mismo.</span>
+        <button class="btn primary" id="sessionPickBtn">Seleccione carpeta</button>
+      </div>
+
+      <div class="session-wrap" id="sessionWrap" hidden>
+        <div class="session-tabs" id="sessionTabs"></div>
+        <div class="session-head">
+          <span class="session-name" id="sessionName"></span>
+          <span class="mono muted session-path" id="sessionPath"></span>
+          <span class="session-state" id="sessionState"></span>
+          <div class="session-actions">
+            <button class="btn" id="restartSessionBtn">Reiniciar</button>
+            <button class="btn danger" id="closeSessionBtn">Cerrar sesión</button>
+          </div>
+        </div>
+        <div class="terminal-host" id="terminalHost"></div>
+      </div>
+    </section>
+
+    <!-- ============ MAPA: grafo de archivos y funciones ============ -->
+    <section id="tab-mapa" class="tab-panel">
+      <div class="map-toolbar">
+        <select id="mapProject" class="map-select"></select>
+        <input id="mapSearch" class="map-search mono" type="search" placeholder="Buscar función o archivo…" />
+        <div class="segmented map-modes" id="mapMode">
+          <button data-mode="fn" class="active">Funciones</button>
+          <button data-mode="file">Archivos</button>
+        </div>
+        <button class="btn" id="mapRefreshBtn">Reanalizar</button>
+        <span class="mono muted small" id="mapStats"></span>
+      </div>
+
+      <div class="map-body">
+        <div class="map-stage" id="mapStage">
+          <canvas id="mapCanvas"></canvas>
+          <div class="map-legend" id="mapLegend"></div>
+          <div class="map-overlay" id="mapOverlay">
+            <span class="plan-empty-title">Sin proyecto analizado</span>
+            <span class="plan-empty-text">Elige una carpeta arriba: el panel lee el código, dibuja una constelación con sus funciones y te dice dónde se usa cada una.</span>
+          </div>
+        </div>
+        <aside class="map-inspector" id="mapInspector"></aside>
       </div>
     </section>
 
     <!-- ============ AGENTES ============ -->
     <section id="tab-agentes" class="tab-panel">
-      <div class="card">
-        <div class="row-between">
-          <h2>Definición de agentes</h2>
-          <button id="addAgentBtn" class="btn subtle small">+ Nuevo agente</button>
+      <div class="page-head">
+        <div>
+          <div class="page-title">Definición de agentes</div>
+          <div class="page-desc">El campo <strong>"Cuándo usarlo"</strong> es lo que Claude Code lee para decidir a qué agente delegar cada tarea. Sé específico ahí.</div>
         </div>
-        <p class="muted">El campo <strong>"Cuándo usarlo"</strong> es lo que Claude Code lee para decidir a qué agente delegar cada tarea. Sé específico ahí.</p>
-        <div id="agentsEditor"></div>
-        <button id="saveAgentsBtn" class="btn primary">Guardar cambios</button>
-        <span id="agentsSaved" class="saved-msg"></span>
+        <div class="page-actions">
+          <span id="agentsSaved" class="saved-msg"></span>
+          <button id="addAgentBtn" class="btn">+ Nuevo agente</button>
+          <button id="saveAgentsBtn" class="btn primary">Guardar cambios</button>
+        </div>
       </div>
+      <div class="agents-editor" id="agentsEditor"></div>
     </section>
 
     <!-- ============ CONSOLA ============ -->
     <section id="tab-consola" class="tab-panel">
-      <div class="card">
-        <h2>Probar un agente</h2>
-        <label>Agente</label>
-        <select id="consoleAgent"></select>
-        <label>Tarea</label>
-        <textarea id="consolePrompt" rows="6" placeholder="Escribe una tarea para probar al agente…"></textarea>
-        <button id="sendConsoleBtn" class="btn primary">Enviar</button>
-        <span id="consoleStatus" class="muted"></span>
-      </div>
-      <div class="card">
-        <h3>Respuesta</h3>
-        <pre id="consoleOutput" class="output-box">—</pre>
+      <div class="split">
+        <div class="split-side">
+          <div class="page-title">Probar un agente</div>
+          <div>
+            <label class="field-label">AGENTE</label>
+            <div class="chip-picker" id="consoleAgents"></div>
+          </div>
+          <div class="grow-field">
+            <label class="field-label" for="consolePrompt">TAREA</label>
+            <textarea id="consolePrompt" placeholder="Escribe una tarea para probar al agente…"></textarea>
+          </div>
+          <div class="row">
+            <button id="sendConsoleBtn" class="btn primary big">Enviar</button>
+            <span class="muted" id="consoleHint"></span>
+          </div>
+        </div>
+
+        <div class="split-main">
+          <div class="row baseline">
+            <span class="subtitle">Respuesta</span>
+            <span class="muted" id="consoleStatus"></span>
+            <button class="link-btn push" id="copyConsoleBtn">Copiar</button>
+          </div>
+          <pre id="consoleOutput" class="output-box grow">—</pre>
+        </div>
       </div>
     </section>
 
     <!-- ============ CONEXIÓN ============ -->
     <section id="tab-conexion" class="tab-panel">
-      <div class="card">
-        <h2>Instrucciones para Claude Code</h2>
-        <p class="muted">Pega esto en el <code>CLAUDE.md</code> de tu proyecto, o dáselo al inicio de la sesión:</p>
-        <pre id="claudeInstructions" class="output-box small-text"></pre>
-        <button id="copyInstructionsBtn" class="btn primary">Copiar instrucciones</button>
-        <span id="copiedMsg" class="saved-msg"></span>
-      </div>
+      <div class="split reverse">
+        <div class="split-main">
+          <div class="page-title">Instrucciones para Claude Code</div>
+          <div class="page-desc">Pega esto en el <span class="mono">CLAUDE.md</span> de tu proyecto, o dáselo al inicio de la sesión.</div>
+          <pre id="claudeInstructions" class="output-box grow small-text"></pre>
+          <div class="row">
+            <button id="copyInstructionsBtn" class="btn primary big">Copiar instrucciones</button>
+            <span class="muted">Se regeneran solas al editar los agentes</span>
+            <span id="copiedMsg" class="saved-msg"></span>
+          </div>
+        </div>
 
-      <div class="card">
-        <h2>Configuración</h2>
-        <label>URL de LM Studio</label>
-        <input id="cfgLmUrl" type="text" />
-        <label>Identificador del modelo</label>
-        <input id="cfgModel" type="text" />
-        <label>Máximo de tareas en paralelo</label>
-        <input id="cfgParallel" type="number" min="1" max="8" />
-        <p class="muted">LM Studio te muestra su límite de paralelismo en la pestaña Developer. No lo excedas.</p>
-        <button id="saveConfigBtn" class="btn primary">Guardar</button>
-        <span id="configSaved" class="saved-msg"></span>
+        <div class="split-side">
+          <div class="page-title">Configuración</div>
+          <div>
+            <label class="field-label" for="cfgLmUrl">URL DE LM STUDIO</label>
+            <div class="input-with-badge">
+              <input id="cfgLmUrl" type="text" class="mono" />
+              <span class="reach" id="cfgReach"></span>
+            </div>
+          </div>
+          <div>
+            <label class="field-label" for="cfgModel">IDENTIFICADOR DEL MODELO</label>
+            <input id="cfgModel" type="text" class="mono" />
+          </div>
+          <div>
+            <label class="field-label">MÁXIMO DE TAREAS EN PARALELO</label>
+            <div class="segmented" id="cfgParallel"></div>
+            <div class="help">LM Studio te muestra su límite de paralelismo en la pestaña Developer. No lo excedas.</div>
+          </div>
+          <div class="info-box">
+            <span class="field-label">ESTADO DEL SERVIDOR</span>
+            <div class="info-row"><span class="muted">Modelos disponibles</span><span class="mono" id="infoModels">—</span></div>
+            <div class="info-row"><span class="muted">Panel local</span><span class="mono" id="infoPort">—</span></div>
+            <div class="info-row"><span class="muted">Sesiones abiertas</span><span class="mono" id="infoSessions">0</span></div>
+          </div>
+          <div class="row">
+            <button id="saveConfigBtn" class="btn primary big">Guardar</button>
+            <span id="configSaved" class="saved-msg"></span>
+          </div>
+        </div>
       </div>
     </section>
   </main>
+
+  <!-- ============ CARRIL DERECHO: agentes y métricas ============ -->
+  <aside class="rail rail-right">
+    <div class="rail-head">
+      <span class="eyebrow">AGENTES</span>
+      <span class="muted small" id="activeCount"></span>
+    </div>
+    <div class="agent-list" id="agentGrid"></div>
+
+    <span class="eyebrow spaced">RESUMEN</span>
+    <div class="kpi-grid" id="kpiGrid"></div>
+
+    <div class="spark-card">
+      <div class="row baseline between">
+        <span class="field-label">RUNS · 24 H</span>
+        <span class="mono muted small" id="sparkTotal"></span>
+      </div>
+      <div class="spark" id="spark"></div>
+    </div>
+  </aside>
 </div>
 
 <!-- Modal de detalle de run -->
 <div class="modal-backdrop" id="modalBackdrop">
   <div class="modal">
-    <div class="row-between">
-      <h3 id="modalTitle">Detalle</h3>
-      <button class="btn subtle small" id="closeModalBtn">Cerrar</button>
+    <div class="row">
+      <span class="modal-title" id="modalTitle">Detalle</span>
+      <button class="link-btn push" id="closeModalBtn">Cerrar ✕</button>
     </div>
     <div id="modalBody"></div>
   </div>
 </div>
 
+<script src="/vendor/xterm/xterm.js"></script>
+<script src="/vendor/xterm/addon-fit.js"></script>
 <script src="app.js"></script>
+<script src="graph.js"></script>
 </body>
 </html>

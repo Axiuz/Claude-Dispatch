@@ -58,6 +58,7 @@ function createRun({ agentId, prompt, source, meta }) {
     stepId: meta?.step_id || null,
     status: "running",
     response: "",
+    reasoning: "",
     error: null,
     startedAt: new Date().toISOString(),
     finishedAt: null,
@@ -306,6 +307,7 @@ async function runAgent({ agent, prompt, source, meta, overrides = {} }) {
     const decoder = new TextDecoder();
     let buffer = "";
     let full = "";
+    let reasoning = "";
     let lastFlush = 0;
 
     while (true) {
@@ -323,14 +325,20 @@ async function runAgent({ agent, prompt, source, meta, overrides = {} }) {
         if (payload === "[DONE]") continue;
         try {
           const json = JSON.parse(payload);
-          const delta = json?.choices?.[0]?.delta?.content;
-          if (delta) {
-            full += delta;
+          const delta = json?.choices?.[0]?.delta || {};
+          // Los modelos con razonamiento mandan lo que "piensan" aparte del texto
+          // (LM Studio usa reasoning_content). Se guarda para verlo en el panel.
+          const thought = delta.reasoning_content || delta.reasoning;
+          if (thought) reasoning += thought;
+          if (delta.content) full += delta.content;
+          if (thought || delta.content) {
             // throttle: emitimos al panel cada ~120ms para no saturar
             const now = Date.now();
             if (now - lastFlush > 120) {
               lastFlush = now;
-              broadcast("run:token", { id: run.id, partial: full });
+              run.response = full;
+              run.reasoning = reasoning;
+              broadcast("run:token", { id: run.id, partial: full, reasoning });
             }
           }
         } catch (_) {}
@@ -341,6 +349,7 @@ async function runAgent({ agent, prompt, source, meta, overrides = {} }) {
     updateRun(run, {
       status: "done",
       response: full,
+      reasoning,
       finishedAt: new Date().toISOString(),
       durationMs,
       tokensApprox: Math.round(full.length / 4),

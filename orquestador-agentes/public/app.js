@@ -5,64 +5,126 @@ let agents = [];
 let runs = [];
 let config = {};
 let currentPlan = null;
+let projects = [];
+let sessions = []; // sesiones de terminal: {id, cwd, name, startedAt, exited, exitCode}
+let lastStatus = null;
 const agentState = {}; // id -> {status, taskLabel, lastDuration, count}
 
-// ================= Render: plan =================
+let activeSessionId = null;
+let consoleAgentId = null;
+let selectedParallel = 4;
+const expandedAgents = new Set();
+
+const PARALLEL_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8];
+const WIDE_TABS = ["vivo", "mapa", "agentes", "consola", "conexion"];
+
+// ================= API =================
+async function api(url, body, method) {
+  const hasBody = body !== undefined;
+  const res = await fetch(url, {
+    method: method || (hasBody ? "POST" : "GET"),
+    headers: hasBody ? { "Content-Type": "application/json" } : undefined,
+    body: hasBody ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+// ================= Tabs =================
+function showTab(tab) {
+  $$(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  $$(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${tab}`));
+  $("#app").classList.toggle("wide", WIDE_TABS.includes(tab));
+  // La terminal y el canvas del mapa solo se pueden medir cuando son visibles
+  if (tab === "sesion") requestAnimationFrame(fitTerminal);
+  if (tab === "mapa") requestAnimationFrame(() => CodeMap.open());
+}
+
+$$(".tab-btn").forEach((btn) => btn.addEventListener("click", () => showTab(btn.dataset.tab)));
+
+// ================= Render: plan (kanban) =================
+const KANBAN_COLUMNS = [
+  ["pending", "PENDIENTE"],
+  ["running", "EN CURSO"],
+  ["done", "HECHO"],
+  ["error", "ERROR"],
+];
+
 function renderPlan() {
-  const wrap = $("#planWrap");
+  $("#planEndpoint").textContent = `POST http://localhost:${config.app_port || 3131}/api/plan`;
   if (!currentPlan) {
-    wrap.style.display = "none";
+    $("#planWrap").hidden = true;
+    $("#planEmpty").hidden = false;
+    renderProjects();
     return;
   }
-  wrap.style.display = "block";
+  $("#planWrap").hidden = false;
+  $("#planEmpty").hidden = true;
 
+  const project = projects.find((p) => p.path === currentPlan.project);
+  const goalParts = [currentPlan.goal, project?.branch ? `⑂ ${project.branch}` : null].filter(Boolean);
   $("#planTitle").textContent = currentPlan.title;
-  $("#planGoal").textContent = currentPlan.goal || "";
+  $("#planGoal").textContent = goalParts.join(" · ");
 
   const total = currentPlan.steps.length;
   const done = currentPlan.steps.filter((s) => s.status === "done").length;
   $("#planBar").style.width = `${(done / total) * 100}%`;
+  $("#planCount").textContent = `${done}/${total} pasos`;
 
-  const cont = $("#planSteps");
-  cont.innerHTML = "";
-  currentPlan.steps.forEach((step) => {
-    const agent = agents.find((a) => a.id === step.agent);
-    const div = document.createElement("div");
-    div.className = `plan-step ${step.status}`;
-
-    const mark = step.status === "done" ? "✓" : step.status === "error" ? "!" : step.order;
-
-    div.innerHTML = `
-      <span class="step-num">${mark}</span>
-      <div class="step-body">
-        <div class="step-desc">${escapeHtml(step.description)}</div>
-        <div class="step-meta">
-          <span class="who ${step.agent ? "" : "claude"}">${
-            step.agent ? `${agent?.emoji || "🤖"} ${agent?.name || step.agent}` : "◈ Claude Code"
-          }</span>
-          ${step.durationMs ? `<span>${(step.durationMs / 1000).toFixed(1)}s</span>` : ""}
-          ${step.note ? `<span>${escapeHtml(step.note)}</span>` : ""}
-        </div>
+  const board = $("#kanban");
+  board.innerHTML = "";
+  KANBAN_COLUMNS.forEach(([status, title]) => {
+    const steps = currentPlan.steps.filter((s) => (s.status || "pending") === status);
+    const col = document.createElement("div");
+    col.className = `kcol ${status}`;
+    col.innerHTML = `
+      <div class="kcol-head">
+        <span class="cdot"></span>
+        <span class="ctitle">${title}</span>
+        <span class="ccount">${steps.length}</span>
       </div>
+      <div class="kcol-body"></div>
     `;
-
-    if (step.runId) {
-      div.style.cursor = "pointer";
-      div.addEventListener("click", () => openRunModal(step.runId));
-    }
-    cont.appendChild(div);
+    const body = col.querySelector(".kcol-body");
+    if (steps.length === 0) body.innerHTML = '<span class="kcol-empty">sin pasos</span>';
+    steps.forEach((step) => body.appendChild(renderStepCard(step)));
+    board.appendChild(col);
   });
+
+  renderProjects();
 }
 
-// ================= Tabs =================
-$$(".tab-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    $$(".tab-btn").forEach((b) => b.classList.remove("active"));
-    $$(".tab-panel").forEach((p) => p.classList.remove("active"));
-    btn.classList.add("active");
-    $(`#tab-${btn.dataset.tab}`).classList.add("active");
-  });
-});
+function renderStepCard(step) {
+  const agent = agents.find((a) => a.id === step.agent);
+  const card = document.createElement("div");
+  card.className = `kcard ${step.status}`;
+
+  const who = step.agent
+    ? `<span class="who">${agent?.emoji || "🤖"} ${escapeHtml(agent?.name || step.agent)}</span>`
+    : '<span class="who claude">◈ Claude Code</span>';
+
+  const meta = [];
+  if (step.status === "running") meta.push(step.agent ? "escribiendo…" : "en curso");
+  if (step.durationMs) meta.push(formatSeconds(step.durationMs));
+  if (step.status === "error" && !step.note) meta.push("error");
+  if (step.note) meta.push(step.note);
+
+  card.innerHTML = `
+    <span class="kdesc">${escapeHtml(step.description)}</span>
+    <div class="kmeta">
+      <span class="knum">#${step.order}</span>
+      ${who}
+      ${meta.length ? `<span class="kmeta-text">${escapeHtml(meta.join(" · "))}</span>` : ""}
+    </div>
+  `;
+
+  if (step.runId) {
+    card.classList.add("clickable");
+    card.addEventListener("click", () => openRunModal(step.runId));
+  }
+  return card;
+}
 
 // ================= SSE (tiempo real) =================
 function connectStream() {
@@ -74,15 +136,23 @@ function connectStream() {
     setAgentState(run.agentId, { status: "working", taskLabel: run.meta?.task_label || truncate(run.prompt, 60) });
     renderAgents();
     renderTimeline();
+    renderKpis();
+    renderLive();
   });
 
+  // Se parchea el DOM de cada vista sin re-renderizar, para que el streaming fluya
   es.addEventListener("run:token", (e) => {
-    const { id, partial } = JSON.parse(e.data);
+    const { id, partial, reasoning } = JSON.parse(e.data);
     const run = runs.find((r) => r.id === id);
-    if (run) {
-      run.response = partial;
-      updateRunStream(id, partial);
-    }
+    if (!run) return;
+    run.response = partial;
+    run.reasoning = reasoning || "";
+    updateRunStream(run);
+    const pane = document.querySelector(`[data-live="${id}"]`);
+    if (pane) updateLivePane(pane, run);
+    const peek = document.querySelector(`[data-peek="${id}"]`);
+    if (peek) peek.textContent = peekText(run);
+    if (modalRunId === id) updateModalStream(run);
   });
 
   es.addEventListener("run:update", (e) => {
@@ -100,6 +170,9 @@ function connectStream() {
     });
     renderAgents();
     renderTimeline();
+    renderKpis();
+    renderLive();
+    if (modalRunId === updated.id) openRunModal(updated.id);
   });
 
   es.addEventListener("plan:new", (e) => {
@@ -120,12 +193,36 @@ function connectStream() {
   es.addEventListener("agents:updated", (e) => {
     agents = JSON.parse(e.data);
     renderAgents();
-    renderAgentSelect();
+    renderConsoleAgents();
+    renderLive();
+    renderInstructions();
   });
 
   es.addEventListener("runs:cleared", () => {
     runs = [];
     renderTimeline();
+    renderKpis();
+    renderLive();
+  });
+
+  es.addEventListener("projects:updated", (e) => {
+    projects = JSON.parse(e.data);
+    renderProjects();
+    if (currentPlan) renderPlan();
+    renderSessionUI();
+  });
+
+  es.addEventListener("terminals:updated", (e) => {
+    sessions = JSON.parse(e.data);
+    // Si la sesión visible desapareció, pasar a otra abierta
+    if (activeSessionId && !sessions.some((s) => s.id === activeSessionId)) {
+      const next = sessions.find((s) => !s.exited) || sessions[0];
+      if (next) attachSession(next.id);
+      else detachTerminal();
+    }
+    renderSessionUI();
+    renderProjects();
+    renderKpis();
   });
 
   es.onerror = () => {
@@ -137,6 +234,318 @@ function setAgentState(id, patch) {
   agentState[id] = { ...(agentState[id] || {}), ...patch };
 }
 
+// Reconstruye el estado de las tarjetas a partir de los runs en memoria,
+// para que recargar el panel no las deje en blanco
+function rebuildAgentState() {
+  [...runs].reverse().forEach((run) => {
+    const st = agentState[run.agentId] || {};
+    if (run.status === "running") {
+      setAgentState(run.agentId, { status: "working", taskLabel: run.meta?.task_label || truncate(run.prompt, 60) });
+    } else {
+      setAgentState(run.agentId, {
+        status: run.status === "error" ? "error" : "idle",
+        taskLabel: run.meta?.task_label || truncate(run.prompt, 60),
+        lastDuration: run.durationMs,
+        count: (st.count || 0) + (run.status === "done" ? 1 : 0),
+      });
+    }
+  });
+}
+
+// ================= Render: proyectos =================
+function renderProjects() {
+  const list = $("#projectList");
+  list.innerHTML = "";
+
+  if (projects.length === 0) {
+    list.innerHTML = `
+      <button class="project-pick" data-pick>
+        <span class="plus">+</span>
+        <span>Seleccione carpeta</span>
+      </button>
+      <div class="project-hint">Todavía sin carpetas. Al registrar un plan, Claude Code añade el proyecto aquí.</div>
+    `;
+    list.querySelector("[data-pick]").addEventListener("click", pickFolder);
+    return;
+  }
+
+  const activeCwd = sessions.find((s) => s.id === activeSessionId)?.cwd;
+  projects.forEach((p) => {
+    const row = document.createElement("div");
+    row.className = "project-row";
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    if (!p.exists) row.classList.add("missing");
+    if (p.path === activeCwd || (currentPlan && p.path === currentPlan.project)) row.classList.add("active");
+
+    let progress = "";
+    if (currentPlan && currentPlan.project === p.path) {
+      const done = currentPlan.steps.filter((s) => s.status === "done").length;
+      progress = `<span class="pprogress">${done}/${currentPlan.steps.length}</span>`;
+    }
+    const live = sessions.some((s) => s.cwd === p.path && !s.exited);
+
+    row.innerHTML = `
+      <div class="line">
+        <span class="pdot ${live ? "live" : ""}" title="${live ? "Sesión de Claude Code abierta" : ""}"></span>
+        <span class="pname">${escapeHtml(p.name)}</span>
+        ${p.exists ? "" : '<span class="badge-red">Suprimido</span>'}
+        ${progress}
+      </div>
+      <span class="ppath">${escapeHtml(tildePath(p.path))}</span>
+      ${p.branch ? `<span class="pbranch">⑂ ${escapeHtml(p.branch)}</span>` : ""}
+      <button class="premove" title="Quitar de recientes">✕</button>
+    `;
+
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".premove")) return;
+      openProject(p);
+    });
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") openProject(p);
+    });
+    row.querySelector(".premove").addEventListener("click", () => removeProject(p));
+    list.appendChild(row);
+  });
+}
+
+async function openProject(p) {
+  if (!p.exists) {
+    alert(`La carpeta ya no existe:\n${p.path}\n\nPuedes quitarla de recientes con ✕.`);
+    return;
+  }
+  const size = terminalSize();
+  try {
+    const session = await api("/api/terminals", { path: p.path, ...size });
+    upsertSession(session);
+    attachSession(session.id);
+    showTab("sesion");
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function removeProject(p) {
+  const live = sessions.some((s) => s.cwd === p.path && !s.exited);
+  const msg = live
+    ? `¿Quitar "${p.name}" de recientes? Su sesión de Claude Code abierta se cerrará.`
+    : `¿Quitar "${p.name}" de recientes? La carpeta no se borra.`;
+  if (!confirm(msg)) return;
+  try {
+    projects = await api("/api/projects", { path: p.path }, "DELETE");
+    renderProjects();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+// Selector de carpeta: la app nativa abre el diálogo de Finder y responde
+// llamando a window.onFolderPicked. Fuera de la app se pide la ruta a mano.
+function pickFolder() {
+  const bridge = window.webkit?.messageHandlers?.pickFolder;
+  if (bridge) {
+    bridge.postMessage(null);
+    return;
+  }
+  const p = prompt("Ruta absoluta de la carpeta:");
+  if (p) window.onFolderPicked(p);
+}
+
+window.onFolderPicked = async (folder) => {
+  try {
+    const project = await api("/api/projects", { path: folder });
+    const idx = projects.findIndex((p) => p.path === project.path);
+    if (idx >= 0) projects[idx] = project;
+    else projects.unshift(project);
+    renderProjects();
+    openProject(project);
+  } catch (err) {
+    alert(err.message);
+  }
+};
+
+$("#addProjectBtn").addEventListener("click", pickFolder);
+$("#sessionPickBtn").addEventListener("click", pickFolder);
+
+// ================= Sesión: terminal con Claude Code =================
+let term = null;
+let fitAddon = null;
+let termStream = null;
+let termResizeObserver = null;
+let resizeTimer = null;
+let inputQueue = "";
+let inputBusy = false;
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function terminalSize() {
+  return term ? { cols: term.cols, rows: term.rows } : { cols: 100, rows: 30 };
+}
+
+function upsertSession(session) {
+  const idx = sessions.findIndex((s) => s.id === session.id);
+  if (idx >= 0) sessions[idx] = session;
+  else sessions.push(session);
+}
+
+function detachTerminal() {
+  if (termStream) termStream.close();
+  if (termResizeObserver) termResizeObserver.disconnect();
+  if (term) term.dispose();
+  term = fitAddon = termStream = termResizeObserver = null;
+  inputQueue = "";
+  activeSessionId = null;
+  $("#terminalHost").innerHTML = "";
+  renderSessionUI();
+}
+
+function attachSession(id) {
+  if (activeSessionId === id && term) return;
+  detachTerminal();
+  activeSessionId = id;
+  // Mostrar el contenedor antes de abrir xterm, o no puede medir el tamaño
+  renderSessionUI();
+
+  term = new Terminal({
+    fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
+    fontSize: 12.5,
+    lineHeight: 1.15,
+    cursorBlink: true,
+    scrollback: 5000,
+    macOptionIsMeta: true,
+    theme: {
+      background: cssVar("--sunken"),
+      foreground: cssVar("--text-2"),
+      cursor: cssVar("--accent"),
+      cursorAccent: cssVar("--sunken"),
+      selectionBackground: cssVar("--accent-line"),
+    },
+  });
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open($("#terminalHost"));
+  fitTerminal();
+
+  termStream = new EventSource(`/api/terminals/${id}/stream`);
+  termStream.addEventListener("buffer", (e) => {
+    term.reset();
+    term.write(JSON.parse(e.data));
+  });
+  termStream.addEventListener("data", (e) => term.write(JSON.parse(e.data)));
+  termStream.addEventListener("exit", (e) => {
+    const { exitCode } = JSON.parse(e.data);
+    const s = sessions.find((x) => x.id === id);
+    if (s) Object.assign(s, { exited: true, exitCode });
+    renderSessionUI();
+  });
+
+  term.onData((data) => sendInput(id, data));
+  term.onResize(({ cols, rows }) => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      api(`/api/terminals/${id}/resize`, { cols, rows }).catch(() => {});
+    }, 120);
+  });
+
+  termResizeObserver = new ResizeObserver(() => fitTerminal());
+  termResizeObserver.observe($("#terminalHost"));
+
+  // Ajustar el pty al tamaño real de la ventana
+  api(`/api/terminals/${id}/resize`, terminalSize()).catch(() => {});
+  renderSessionUI();
+  renderProjects();
+  term.focus();
+}
+
+function fitTerminal() {
+  const host = $("#terminalHost");
+  if (!term || !fitAddon || host.offsetWidth === 0) return;
+  try {
+    fitAddon.fit();
+  } catch (_) {}
+}
+
+// Las teclas se mandan en orden: una petición a la vez, agrupando lo que se
+// escriba mientras tanto
+function sendInput(id, data) {
+  inputQueue += data;
+  if (!inputBusy) flushInput(id);
+}
+
+async function flushInput(id) {
+  inputBusy = true;
+  while (inputQueue && activeSessionId === id) {
+    const chunk = inputQueue;
+    inputQueue = "";
+    try {
+      await api(`/api/terminals/${id}/input`, { data: chunk });
+    } catch (_) {
+      inputQueue = "";
+    }
+  }
+  inputBusy = false;
+}
+
+function renderSessionUI() {
+  const live = sessions.filter((s) => !s.exited).length;
+  $("#sessionCount").textContent = live ? String(live) : "";
+  $("#infoSessions").textContent = String(live);
+
+  const active = sessions.find((s) => s.id === activeSessionId);
+  $("#sessionEmpty").hidden = !!active;
+  $("#sessionWrap").hidden = !active;
+  if (!active) return;
+
+  const tabs = $("#sessionTabs");
+  tabs.innerHTML = "";
+  if (sessions.length > 1) {
+    sessions.forEach((s) => {
+      const chip = document.createElement("button");
+      chip.className = `session-chip ${s.id === activeSessionId ? "active" : ""}`;
+      chip.innerHTML = `<span class="sdot ${s.exited ? "off" : ""}"></span>${escapeHtml(s.name)}`;
+      chip.addEventListener("click", () => attachSession(s.id));
+      tabs.appendChild(chip);
+    });
+  }
+
+  const project = projects.find((p) => p.path === active.cwd);
+  $("#sessionName").textContent = active.name;
+  $("#sessionPath").textContent = [tildePath(active.cwd), project?.branch ? `⑂ ${project.branch}` : null]
+    .filter(Boolean)
+    .join(" · ");
+  const state = $("#sessionState");
+  state.textContent = active.exited ? `terminada (código ${active.exitCode ?? "?"})` : "● en curso";
+  state.classList.toggle("off", active.exited);
+}
+
+$("#closeSessionBtn").addEventListener("click", async () => {
+  const active = sessions.find((s) => s.id === activeSessionId);
+  if (!active) return;
+  if (!active.exited && !confirm(`¿Cerrar la sesión de Claude Code en "${active.name}"?`)) return;
+  try {
+    await api(`/api/terminals/${active.id}`, undefined, "DELETE");
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+$("#restartSessionBtn").addEventListener("click", async () => {
+  const active = sessions.find((s) => s.id === activeSessionId);
+  if (!active) return;
+  if (!active.exited && !confirm(`¿Reiniciar la sesión en "${active.name}"? Se cierra la actual.`)) return;
+  try {
+    const size = terminalSize();
+    await api(`/api/terminals/${active.id}`, undefined, "DELETE");
+    const session = await api("/api/terminals", { path: active.cwd, ...size });
+    upsertSession(session);
+    attachSession(session.id);
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
 // ================= Render: tarjetas de agentes =================
 function renderAgents() {
   const grid = $("#agentGrid");
@@ -147,8 +556,17 @@ function renderAgents() {
     const st = agentState[a.id] || {};
     if (st.status === "working") working++;
 
+    // runs va del más nuevo al más viejo
+    const liveRun = runs.find((r) => r.agentId === a.id && r.status === "running");
+    const lastRun = liveRun || runs.find((r) => r.agentId === a.id);
+
     const card = document.createElement("div");
     card.className = "agent-card";
+    if (lastRun) {
+      card.classList.add("clickable");
+      card.title = liveRun ? "Ver lo que está escribiendo" : "Ver su última tarea";
+      card.addEventListener("click", () => openRunModal(lastRun.id));
+    }
     if (a.enabled === false) card.classList.add("disabled");
     if (st.status === "working") card.classList.add("working");
     if (st.status === "error") card.classList.add("error-state");
@@ -156,17 +574,19 @@ function renderAgents() {
     const stateLabel =
       a.enabled === false ? "off" : st.status === "working" ? "trabajando" : st.status === "error" ? "error" : "libre";
 
+    const stats = [st.count ? `${st.count} tareas` : null, st.lastDuration ? `último ${formatSeconds(st.lastDuration)}` : null]
+      .filter(Boolean)
+      .join(" · ");
+
     card.innerHTML = `
       <div class="head">
         <span class="emoji">${a.emoji || "🤖"}</span>
         <span class="name">${escapeHtml(a.name)}</span>
         <span class="state">${stateLabel}</span>
       </div>
-      <div class="task">${st.taskLabel ? escapeHtml(st.taskLabel) : '<span style="opacity:.5">sin tarea asignada</span>'}</div>
-      <div class="stats">
-        <span>${st.count || 0} tareas</span>
-        ${st.lastDuration ? `<span>último: ${(st.lastDuration / 1000).toFixed(1)}s</span>` : ""}
-      </div>
+      ${st.status === "working" || st.status === "error" ? `<div class="task">${escapeHtml(st.taskLabel || "")}</div>` : ""}
+      ${liveRun ? `<div class="peek" data-peek="${liveRun.id}">${escapeHtml(peekText(liveRun))}</div>` : ""}
+      ${stats ?`<div class="stats">${stats}</div>` : ""}
     `;
     grid.appendChild(card);
   });
@@ -174,11 +594,68 @@ function renderAgents() {
   $("#activeCount").textContent = working > 0 ? `${working} trabajando` : "todos libres";
 }
 
+// ================= Render: KPIs y gráfica de 24 h =================
+function renderKpis() {
+  const today = new Date().toDateString();
+  const finished = runs.filter((r) => r.status !== "running");
+  const done = runs.filter((r) => r.status === "done");
+  const errors = runs.filter((r) => r.status === "error");
+  const running = runs.filter((r) => r.status === "running").length;
+  const todayCount = runs.filter((r) => new Date(r.startedAt).toDateString() === today).length;
+  const avgMs = done.length ? done.reduce((sum, r) => sum + (r.durationMs || 0), 0) / done.length : null;
+  const tokens = done.reduce((sum, r) => sum + (r.tokensApprox || 0), 0);
+  const liveSessions = sessions.filter((s) => !s.exited).length;
+
+  const kpis = [
+    { label: "TAREAS HOY", value: runs.length ? todayCount : null, sub: `${runs.length} en memoria` },
+    { label: "TIEMPO MEDIO", value: avgMs !== null ? formatSeconds(avgMs) : null, sub: "por tarea" },
+    {
+      label: "TASA DE ERROR",
+      value: finished.length ? `${((errors.length / finished.length) * 100).toFixed(1)}%` : null,
+      sub: `${errors.length} de ${finished.length} runs`,
+    },
+    { label: "TOKENS", value: done.length ? `~${formatCount(tokens)}` : null, sub: "estimados" },
+    { label: "EN CURSO", value: running, sub: `máx. ${config.max_parallel || 4} en paralelo`, always: true },
+    { label: "SESIONES", value: liveSessions, sub: "de Claude Code", always: true },
+  ];
+
+  $("#kpiGrid").innerHTML = kpis
+    .map(
+      (k) => `
+      <div class="kpi">
+        <div class="klabel">${k.label}</div>
+        <div class="kvalue ${k.value === null ? "empty" : ""}">${k.value === null ? "—" : k.value}</div>
+        <div class="ksub">${runs.length || k.always ? escapeHtml(k.sub) : "sin datos"}</div>
+      </div>`
+    )
+    .join("");
+
+  // Runs por hora en las últimas 24 h; la última barra es la hora actual
+  const HOUR = 3600 * 1000;
+  const now = Date.now();
+  const buckets = new Array(24).fill(0);
+  runs.forEach((r) => {
+    const age = now - new Date(r.startedAt).getTime();
+    if (age < 0 || age >= 24 * HOUR) return;
+    buckets[23 - Math.floor(age / HOUR)]++;
+  });
+  const max = Math.max(...buckets, 1);
+  const total = buckets.reduce((a, b) => a + b, 0);
+  $("#sparkTotal").textContent = `${total} total`;
+  $("#spark").innerHTML = buckets
+    .map((n, i) => {
+      const cls = i === 23 ? "now" : n === 0 ? "zero" : "";
+      const label = i === 23 ? "última hora" : `hace ${23 - i} h`;
+      return `<div class="bar ${cls}" style="height:${Math.max((n / max) * 100, 7)}%" title="${label}: ${n} runs"></div>`;
+    })
+    .join("");
+}
+
 // ================= Render: timeline =================
 function renderTimeline() {
   const tl = $("#timeline");
   if (runs.length === 0) {
-    tl.innerHTML = '<p class="muted empty">Sin actividad todavía. Las delegaciones de Claude Code aparecerán aquí en vivo.</p>';
+    tl.innerHTML = '<p class="empty-note">Sin actividad todavía. Las delegaciones de Claude Code aparecerán aquí en vivo.</p>';
     return;
   }
 
@@ -189,113 +666,285 @@ function renderTimeline() {
     div.className = `run-item ${run.status}`;
     div.dataset.runId = run.id;
 
-    const time = new Date(run.startedAt).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
     div.innerHTML = `
       <div class="run-head">
         <span>${agent?.emoji || "🤖"}</span>
         <span class="run-agent">${escapeHtml(agent?.name || run.agentId)}</span>
         <span class="run-badge source">${escapeHtml(run.source)}</span>
         ${run.meta?.task_label ? `<span class="run-badge">${escapeHtml(run.meta.task_label)}</span>` : ""}
-        <span class="run-time">${time}${run.durationMs ? ` · ${(run.durationMs / 1000).toFixed(1)}s` : ""}</span>
+        <span class="run-time">${formatTime(run.startedAt)}${run.durationMs ? ` · ${formatSeconds(run.durationMs)}` : ""}</span>
       </div>
-      <div class="run-prompt"><strong>Tarea:</strong> ${escapeHtml(truncate(run.prompt, 160))}</div>
+      <div class="run-prompt">Tarea: <span>${escapeHtml(truncate(run.prompt, 160))}</span></div>
       ${
         run.status === "error"
-          ? `<div class="run-stream" style="color:var(--red)">${escapeHtml(run.error || "")}</div>`
-          : run.response
-          ? `<div class="run-stream fading" data-stream="${run.id}">${escapeHtml(truncate(run.response, 600))}${run.status === "running" ? '<span class="cursor">&nbsp;</span>' : ""}</div>`
+          ? `<div class="run-stream error-text">${escapeHtml(run.error || "")}</div>`
           : run.status === "running"
-          ? `<div class="run-stream" data-stream="${run.id}"><span class="cursor">&nbsp;</span></div>`
+          ? `<div class="run-stream tail" data-stream="${run.id}"></div>`
+          : run.response
+          ? `<div class="run-stream fading">${escapeHtml(truncate(run.response, 600))}</div>`
           : ""
       }
     `;
 
     div.addEventListener("click", () => openRunModal(run.id));
     tl.appendChild(div);
+    const stream = div.querySelector("[data-stream]");
+    if (stream) fillRunStream(stream, run);
   });
 }
 
-function updateRunStream(id, partial) {
-  const el = document.querySelector(`[data-stream="${id}"]`);
-  if (el) {
-    el.classList.add("fading");
-    el.innerHTML = escapeHtml(truncate(partial, 600)) + '<span class="cursor">&nbsp;</span>';
-  } else {
-    renderTimeline();
-  }
+// Mientras escribe se muestra el final del texto (lo último que salió), no el principio
+function fillRunStream(el, run) {
+  el.classList.toggle("thinking", !run.response && !!run.reasoning);
+  el.innerHTML = escapeHtml(tail(run.response || run.reasoning, 400)) + '<span class="cursor"></span>';
+  el.scrollTop = el.scrollHeight;
+}
+
+function updateRunStream(run) {
+  const el = document.querySelector(`[data-stream="${run.id}"]`);
+  if (el) fillRunStream(el, run);
+  else if (runs.indexOf(run) < 40) renderTimeline();
+}
+
+// ================= En vivo =================
+// Un panel por run: todos los que están en curso y, en los huecos que queden
+// hasta el límite de paralelismo, las últimas respuestas terminadas.
+function liveRuns() {
+  const slots = config.max_parallel || 4;
+  const running = runs.filter((r) => r.status === "running");
+  const finished = runs.filter((r) => r.status !== "running").slice(0, Math.max(slots - running.length, 0));
+  const shown = new Set([...running, ...finished]);
+  return runs.filter((r) => shown.has(r));
+}
+
+function renderLive() {
+  const grid = $("#liveGrid");
+  const list = liveRuns();
+  const running = runs.filter((r) => r.status === "running").length;
+  $("#liveCount").textContent = running ? String(running) : "";
+  $("#liveEmpty").hidden = list.length > 0;
+
+  // Reutilizar los paneles que ya existen: recrearlos perdería el scroll y el
+  // desplegable de la tarea
+  const existing = new Map([...grid.children].map((el) => [el.dataset.live, el]));
+  list.forEach((run, i) => {
+    const pane = existing.get(run.id) || createLivePane(run);
+    existing.delete(run.id);
+    updateLivePane(pane, run);
+    if (grid.children[i] !== pane) grid.insertBefore(pane, grid.children[i] || null);
+  });
+  existing.forEach((el) => el.remove());
+}
+
+function createLivePane(run) {
+  const pane = document.createElement("div");
+  pane.dataset.live = run.id;
+  pane.innerHTML = `
+    <div class="live-head">
+      <span class="live-emoji"></span>
+      <span class="run-agent"></span>
+      <span class="live-label"></span>
+      <span class="live-state"></span>
+      <span class="run-time" data-elapsed="${run.id}"></span>
+      <button class="link-btn live-open" title="Ver detalle">⤢</button>
+    </div>
+    <details class="live-prompt">
+      <summary>Tarea: <span>${escapeHtml(truncate(run.prompt, 140))}</span></summary>
+      <pre class="modal-box">${escapeHtml(run.prompt)}</pre>
+    </details>
+    <div class="live-output"><div class="reasoning"></div><span class="live-text"></span><span class="cursor"></span></div>
+  `;
+  pane.querySelector(".live-open").addEventListener("click", () => openRunModal(run.id));
+  return pane;
+}
+
+function updateLivePane(pane, run) {
+  const agent = agents.find((a) => a.id === run.agentId);
+  pane.className = `live-pane ${run.status}`;
+  pane.querySelector(".live-emoji").textContent = agent?.emoji || "🤖";
+  pane.querySelector(".run-agent").textContent = agent?.name || run.agentId;
+  const label = pane.querySelector(".live-label");
+  label.className = `live-label ${run.meta?.task_label ? "run-badge" : ""}`;
+  label.textContent = run.meta?.task_label || "";
+  pane.querySelector(".live-state").textContent = liveStateText(run);
+  updateElapsed(pane.querySelector("[data-elapsed]"), run);
+
+  const out = pane.querySelector(".live-output");
+  stickToBottom(out, () => {
+    out.classList.toggle("error-text", run.status === "error");
+    out.querySelector(".reasoning").textContent = run.reasoning || "";
+    out.querySelector(".live-text").textContent =
+      run.status === "error" ? [run.response, run.error].filter(Boolean).join("\n\n") : run.response || "";
+    out.querySelector(".cursor").hidden = run.status !== "running";
+  });
+}
+
+function liveStateText(run) {
+  if (run.status === "done") return "hecho";
+  if (run.status === "error") return "error";
+  if (run.response) return "escribiendo";
+  return run.reasoning ? "pensando" : "esperando al modelo";
+}
+
+function updateElapsed(el, run) {
+  const ms = run.durationMs ?? Date.now() - new Date(run.startedAt).getTime();
+  const tokens = Math.round(((run.response || "").length + (run.reasoning || "").length) / 4);
+  el.textContent = `${formatSeconds(ms)}${tokens ? ` · ~${tokens} tokens` : ""}`;
+}
+
+// Si el usuario subió para leer algo, no lo arrastramos al final
+function stickToBottom(el, update) {
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+  update();
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+// Lo último que escribió, en una línea, para las tarjetas del carril derecho
+function peekText(run) {
+  const text = (run.response || run.reasoning || "").replace(/\s+/g, " ").trim();
+  return text.length > 60 ? "…" + text.slice(-60) : text;
 }
 
 // ================= Modal de detalle =================
+// Si el run sigue en curso, el modal se actualiza en vivo (ver run:token)
+let modalRunId = null;
+
 function openRunModal(id) {
   const run = runs.find((r) => r.id === id);
   if (!run) return;
+  modalRunId = id;
   const agent = agents.find((a) => a.id === run.agentId);
 
-  $("#modalTitle").textContent = `${agent?.emoji || "🤖"} ${agent?.name || run.agentId}`;
+  const label = run.meta?.task_label ? ` · ${run.meta.task_label}` : "";
+  $("#modalTitle").textContent = `${agent?.emoji || "🤖"} ${agent?.name || run.agentId}${label}`;
+
+  const statusClass = run.status === "done" ? "status-ok" : run.status === "error" ? "status-bad" : "";
+  const statusText = run.status === "done" ? "ok" : run.status === "error" ? "error" : "en curso";
   $("#modalBody").innerHTML = `
-    <div class="modal-section">
-      <h4>Metadatos</h4>
-      <p class="muted">
-        Origen: ${escapeHtml(run.source)} · Estado: ${run.status}
-        ${run.durationMs ? ` · Duración: ${(run.durationMs / 1000).toFixed(2)}s` : ""}
-        ${run.tokensApprox ? ` · ~${run.tokensApprox} tokens` : ""}
-      </p>
+    <div class="modal-meta">
+      <span>${formatTime(run.startedAt)}</span>
+      ${run.durationMs ? `<span>${formatSeconds(run.durationMs, 2)}</span>` : ""}
+      ${run.tokensApprox ? `<span>~${run.tokensApprox} tokens</span>` : ""}
+      <span>origen: ${escapeHtml(run.source)}</span>
+      <span class="${statusClass}">${statusText}</span>
     </div>
-    <div class="modal-section">
-      <h4>Prompt enviado</h4>
-      <pre class="output-box">${escapeHtml(run.prompt)}</pre>
+    <div>
+      <div class="field-label">TAREA ENVIADA</div>
+      <pre class="modal-box">${escapeHtml(run.prompt)}</pre>
     </div>
-    <div class="modal-section">
-      <h4>${run.status === "error" ? "Error" : "Respuesta"}</h4>
-      <pre class="output-box">${escapeHtml(run.error || run.response || "—")}</pre>
+    ${
+      run.reasoning
+        ? `<div>
+      <div class="field-label">RAZONAMIENTO</div>
+      <pre class="modal-box reasoning-box" id="modalReasoning">${escapeHtml(run.reasoning)}</pre>
+    </div>`
+        : ""
+    }
+    <div>
+      <div class="field-label">${run.status === "error" ? "ERROR" : run.status === "running" ? "RESPUESTA · EN VIVO" : "RESPUESTA"}</div>
+      <pre class="modal-box ${run.status === "error" ? "error-text" : ""}" id="modalResponse">${escapeHtml(run.error || run.response || "—")}</pre>
     </div>
   `;
+  if (run.status === "running") {
+    $$("#modalBody .modal-box[id]").forEach((el) => (el.scrollTop = el.scrollHeight));
+  }
   $("#modalBackdrop").classList.add("open");
 }
 
-$("#closeModalBtn").addEventListener("click", () => $("#modalBackdrop").classList.remove("open"));
+function updateModalStream(run) {
+  const response = $("#modalResponse");
+  const reasoning = $("#modalReasoning");
+  // El bloque de razonamiento aparece a mitad del stream: hay que volver a pintar
+  if (!response || (run.reasoning && !reasoning)) return openRunModal(run.id);
+  if (reasoning) stickToBottom(reasoning, () => (reasoning.textContent = run.reasoning));
+  stickToBottom(response, () => (response.textContent = run.response || "—"));
+}
+
+function closeRunModal() {
+  modalRunId = null;
+  $("#modalBackdrop").classList.remove("open");
+}
+
+$("#closeModalBtn").addEventListener("click", closeRunModal);
 $("#modalBackdrop").addEventListener("click", (e) => {
-  if (e.target.id === "modalBackdrop") $("#modalBackdrop").classList.remove("open");
+  if (e.target.id === "modalBackdrop") closeRunModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeRunModal();
 });
 
 // ================= Editor de agentes =================
+function agentStatsText(agentId) {
+  const own = runs.filter((r) => r.agentId === agentId);
+  const done = own.filter((r) => r.status === "done");
+  const errors = own.filter((r) => r.status === "error");
+  const finished = done.length + errors.length;
+  if (!finished) return "sin tareas en esta sesión";
+  const avg = done.length ? done.reduce((s, r) => s + (r.durationMs || 0), 0) / done.length : 0;
+  return `${done.length} tareas · ${formatSeconds(avg)} de media · ${((errors.length / finished) * 100).toFixed(1)} % de error`;
+}
+
 function renderAgentsEditor() {
   const c = $("#agentsEditor");
   c.innerHTML = "";
+  if (expandedAgents.size === 0 && agents[0]) expandedAgents.add(agents[0].id);
+
   agents.forEach((a) => {
     const block = document.createElement("div");
-    block.className = "agent-block";
+    block.className = `agent-block ${expandedAgents.has(a.id) ? "open" : ""}`;
     block.innerHTML = `
       <div class="block-head">
-        <span style="font-size:17px">${a.emoji || "🤖"}</span>
-        <input class="name-input" data-id="${a.id}" data-field="name" value="${escapeAttr(a.name)}" />
+        <span class="bemoji">${a.emoji || "🤖"}</span>
+        <input class="name-input" data-id="${a.id}" data-field="name" value="${escapeAttr(a.name)}" size="${Math.max(a.name.length + 2, 6)}" />
         <span class="id-tag">/agent/${a.id}</span>
-        <label class="toggle"><input type="checkbox" data-id="${a.id}" data-field="enabled" ${a.enabled !== false ? "checked" : ""}/> activo</label>
-        <button class="btn danger small" data-delete="${a.id}">Eliminar</button>
+        <span class="when-preview">${escapeHtml(a.use_when || "")}</span>
+        <div class="block-right">
+          <label class="toggle">
+            <input type="checkbox" data-id="${a.id}" data-field="enabled" ${a.enabled !== false ? "checked" : ""} />
+            <span class="track"></span>
+            <span class="tlabel">ACTIVO</span>
+          </label>
+          <button class="btn danger" data-delete="${a.id}">Eliminar</button>
+          <span class="chev">⌄</span>
+        </div>
       </div>
 
-      <label>Cuándo usarlo (esto lee Claude Code para elegir)</label>
-      <textarea rows="2" data-id="${a.id}" data-field="use_when">${escapeHtml(a.use_when || "")}</textarea>
-
-      <label>System prompt</label>
-      <textarea rows="6" data-id="${a.id}" data-field="system_prompt">${escapeHtml(a.system_prompt || "")}</textarea>
-
-      <div class="mini-row">
-        <div>
-          <label>Temperatura</label>
-          <input type="number" step="0.1" min="0" max="1" data-id="${a.id}" data-field="temperature" value="${a.temperature ?? 0.3}" />
+      <div class="block-body">
+        <div class="two-cols">
+          <div>
+            <label class="field-label">CUÁNDO USARLO · LO LEE CLAUDE CODE</label>
+            <textarea data-id="${a.id}" data-field="use_when">${escapeHtml(a.use_when || "")}</textarea>
+          </div>
+          <div>
+            <label class="field-label">SYSTEM PROMPT</label>
+            <textarea data-id="${a.id}" data-field="system_prompt">${escapeHtml(a.system_prompt || "")}</textarea>
+          </div>
         </div>
-        <div>
-          <label>Max tokens</label>
-          <input type="number" step="50" min="100" data-id="${a.id}" data-field="max_tokens" value="${a.max_tokens ?? 1200}" />
-        </div>
-        <div>
-          <label>Emoji</label>
-          <input type="text" maxlength="2" data-id="${a.id}" data-field="emoji" value="${escapeAttr(a.emoji || "🤖")}" />
+        <div class="mini-row">
+          <div>
+            <label class="field-label">TEMPERATURA</label>
+            <input type="number" class="mono" step="0.1" min="0" max="1" data-id="${a.id}" data-field="temperature" value="${a.temperature ?? 0.3}" />
+          </div>
+          <div>
+            <label class="field-label">MAX TOKENS</label>
+            <input type="number" class="mono" step="50" min="100" data-id="${a.id}" data-field="max_tokens" value="${a.max_tokens ?? 1200}" />
+          </div>
+          <div class="emoji-field">
+            <label class="field-label">EMOJI</label>
+            <input type="text" maxlength="2" data-id="${a.id}" data-field="emoji" value="${escapeAttr(a.emoji || "🤖")}" />
+          </div>
+          <span class="agent-stats">${agentStatsText(a.id)}</span>
         </div>
       </div>
     `;
+
+    // Plegar / desplegar sin re-renderizar, para no perder lo que se esté editando
+    block.querySelector(".block-head").addEventListener("click", (e) => {
+      if (e.target.closest("input, button, label")) return;
+      block.classList.toggle("open");
+      if (block.classList.contains("open")) expandedAgents.add(a.id);
+      else expandedAgents.delete(a.id);
+    });
     c.appendChild(block);
   });
 
@@ -320,13 +969,16 @@ $("#saveAgentsBtn").addEventListener("click", async () => {
     agent[f] = v;
   });
 
-  await fetch("/api/agents", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(updated),
-  });
+  try {
+    await api("/api/agents", updated);
+  } catch (err) {
+    alert(`No se guardaron los cambios: ${err.message}`);
+    return;
+  }
   await loadAgents();
-  flash("#agentsSaved", "Guardado ✓");
+  // Las sesiones abiertas recibieron la lista al arrancar; el manifest les da la nueva
+  const live = sessions.some((s) => !s.exited);
+  flash("#agentsSaved", live ? "Guardado ✓ · Claude lo verá en su próxima tarea" : "Guardado ✓");
 });
 
 $("#addAgentBtn").addEventListener("click", async () => {
@@ -348,25 +1000,41 @@ $("#addAgentBtn").addEventListener("click", async () => {
 });
 
 // ================= Consola =================
-function renderAgentSelect() {
-  const sel = $("#consoleAgent");
-  sel.innerHTML = "";
-  agents
-    .filter((a) => a.enabled !== false)
-    .forEach((a) => {
-      const opt = document.createElement("option");
-      opt.value = a.id;
-      opt.textContent = `${a.emoji || "🤖"} ${a.name}`;
-      sel.appendChild(opt);
+function renderConsoleAgents() {
+  const enabled = agents.filter((a) => a.enabled !== false);
+  if (!enabled.some((a) => a.id === consoleAgentId)) consoleAgentId = enabled[0]?.id || null;
+
+  const picker = $("#consoleAgents");
+  picker.innerHTML = "";
+  agents.forEach((a) => {
+    const chip = document.createElement("button");
+    chip.className = `chip ${a.id === consoleAgentId ? "active" : ""}`;
+    chip.textContent = `${a.emoji || "🤖"} ${a.name}`;
+    chip.disabled = a.enabled === false;
+    chip.title = a.enabled === false ? "Desactivado" : a.use_when || "";
+    chip.addEventListener("click", () => {
+      consoleAgentId = a.id;
+      renderConsoleAgents();
     });
+    picker.appendChild(chip);
+  });
+
+  const agent = agents.find((a) => a.id === consoleAgentId);
+  $("#consoleHint").textContent = agent
+    ? `temp ${agent.temperature ?? 0.3} · máx. ${agent.max_tokens ?? 1200} tokens · ⌘↵ para enviar`
+    : "No hay agentes activos";
 }
 
-$("#sendConsoleBtn").addEventListener("click", async () => {
-  const agentId = $("#consoleAgent").value;
+async function sendConsole() {
+  const agentId = consoleAgentId;
   const prompt = $("#consolePrompt").value.trim();
-  if (!prompt) return;
+  if (!prompt || !agentId) return;
 
-  $("#consoleStatus").textContent = "Ejecutando…";
+  const btn = $("#sendConsoleBtn");
+  const status = $("#consoleStatus");
+  btn.disabled = true;
+  status.className = "muted";
+  status.textContent = "Ejecutando…";
   $("#consoleOutput").textContent = "—";
 
   try {
@@ -378,30 +1046,77 @@ $("#sendConsoleBtn").addEventListener("click", async () => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     $("#consoleOutput").textContent = data.content;
-    $("#consoleStatus").textContent = `Listo en ${(data.durationMs / 1000).toFixed(1)}s`;
+    status.className = "status-ok";
+    status.textContent = `completado en ${formatSeconds(data.durationMs)} · ~${Math.round(data.content.length / 4)} tokens`;
   } catch (err) {
     $("#consoleOutput").textContent = "Error: " + err.message;
-    $("#consoleStatus").textContent = "";
+    status.className = "status-bad";
+    status.textContent = "falló";
+  } finally {
+    btn.disabled = false;
   }
+}
+
+$("#sendConsoleBtn").addEventListener("click", sendConsole);
+$("#consolePrompt").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    sendConsole();
+  }
+});
+$("#copyConsoleBtn").addEventListener("click", () => {
+  navigator.clipboard.writeText($("#consoleOutput").textContent);
+  flash("#consoleStatus", "Copiado ✓");
 });
 
 // ================= Estado / Config =================
 async function refreshStatus() {
+  const pill = $("#statusPill");
+  const reach = $("#cfgReach");
   try {
     const res = await fetch("/api/status");
     const data = await res.json();
-    config = data.config;
+    lastStatus = data;
+    config = { ...config, ...data.config };
     if (data.reachable) {
+      pill.className = "status-pill ok";
       $("#statusDot").className = "dot ok";
       $("#statusText").textContent = `${data.config.model} · en línea`;
+      reach.className = "reach ok";
+      reach.textContent = "✓ responde";
+      $("#infoModels").textContent = data.models?.length ? data.models.join(", ") : "ninguno cargado";
     } else {
+      pill.className = "status-pill bad";
       $("#statusDot").className = "dot bad";
-      $("#statusText").textContent = "LM Studio no responde";
+      $("#statusText").textContent = "LM Studio sin conexión · reintentar";
+      reach.className = "reach bad";
+      reach.textContent = "✗ no responde";
+      $("#infoModels").textContent = "—";
     }
   } catch {
+    pill.className = "status-pill bad";
     $("#statusDot").className = "dot bad";
-    $("#statusText").textContent = "sin conexión";
+    $("#statusText").textContent = "orquestador sin conexión";
+    reach.className = "reach bad";
+    reach.textContent = "✗ sin orquestador";
   }
+}
+
+$("#statusPill").addEventListener("click", refreshStatus);
+
+function renderParallel() {
+  const seg = $("#cfgParallel");
+  seg.innerHTML = "";
+  PARALLEL_OPTIONS.forEach((n) => {
+    const b = document.createElement("button");
+    b.textContent = String(n);
+    b.className = n === selectedParallel ? "active" : "";
+    b.addEventListener("click", () => {
+      selectedParallel = n;
+      renderParallel();
+    });
+    seg.appendChild(b);
+  });
 }
 
 async function loadConfig() {
@@ -409,7 +1124,9 @@ async function loadConfig() {
   config = await res.json();
   $("#cfgLmUrl").value = config.lmstudio_url;
   $("#cfgModel").value = config.model;
-  $("#cfgParallel").value = config.max_parallel;
+  selectedParallel = config.max_parallel || 4;
+  $("#infoPort").textContent = `:${config.app_port || 3131}`;
+  renderParallel();
   renderInstructions();
 }
 
@@ -420,74 +1137,24 @@ $("#saveConfigBtn").addEventListener("click", async () => {
     body: JSON.stringify({
       lmstudio_url: $("#cfgLmUrl").value.trim(),
       model: $("#cfgModel").value.trim(),
-      max_parallel: parseInt($("#cfgParallel").value, 10),
+      max_parallel: selectedParallel,
     }),
   });
   await loadConfig();
   flash("#configSaved", "Guardado ✓");
   refreshStatus();
+  renderKpis();
 });
 
 // ================= Instrucciones para Claude Code =================
-function renderInstructions() {
-  const port = config.app_port || 3131;
-  const list = agents
-    .filter((a) => a.enabled !== false)
-    .map((a) => `- ${a.id} (${a.name}): ${a.use_when}`)
-    .join("\n");
-
-  const text = `# Flujo con agentes de IA locales
-
-Eres el orquestador: tú lees mis archivos y tocas mi código. Los agentes locales
-no leen archivos ni recuerdan nada — todo el contexto se lo pasas tú en el prompt.
-
-## Agentes disponibles
-${list}
-
-## Ciclo de trabajo
-
-1) PLAN — Entra en plan mode, lee lo necesario, arma el plan decidiendo qué paso
-   hace cada quien, y preséntamelo. No ejecutes hasta que yo apruebe.
-
-2) REGISTRO — Cuando apruebe, registra el plan en mi panel:
-   curl -s -X POST http://localhost:${port}/api/plan \\
-     -H "Content-Type: application/json" \\
-     -d '{"title":"...","goal":"...","steps":[
-           {"description":"Leer X","agent":null},
-           {"description":"Generar Y","agent":"coder"}
-         ]}'
-   ("agent": null = lo haces tú)
-
-3) EJECUCIÓN
-   Paso tuyo:
-     curl -s -X POST http://localhost:${port}/api/plan/step/step-1 \\
-       -H "Content-Type: application/json" -d '{"status":"done"}'
-
-   Paso delegado (incluye el contexto en el prompt):
-     curl -s -X POST http://localhost:${port}/agent/{id} \\
-       -H "Content-Type: application/json" \\
-       -d '{"prompt":"Contexto:\\n<código>\\n\\nTarea:\\n<qué>",
-            "task_label":"etiqueta","step_id":"step-2"}'
-
-   En paralelo (máx ${config.max_parallel || 4}):
-     curl -s -X POST http://localhost:${port}/delegate \\
-       -H "Content-Type: application/json" \\
-       -d '{"tasks":[{"agent":"tester","prompt":"...","step_id":"step-3"}]}'
-
-4) REVISIÓN — Revisa cada respuesta antes de integrarla. Si viene mal, corrígela
-   tú; no reenvíes la misma tarea al agente. Al terminar, repórtame qué cambió
-   y qué dudas tienes. Cierra con: curl -s -X DELETE http://localhost:${port}/api/plan
-
-## Reglas
-- Verifica antes de empezar: curl -s http://localhost:${port}/api/status
-  Si "reachable" es false, avísame en vez de continuar.
-- Pega el código relevante en el prompt del agente; no describas el archivo.
-- Incluye SIEMPRE "task_label" y "step_id" — es lo que veo en mi panel.
-- NO delegues: arquitectura, cambios multi-archivo, lógica de negocio,
-  integraciones externas (AWS/PayPal/Amplify), ni nada de seguridad/auth.
-- Ante la duda, hazlo tú.`;
-
-  $("#claudeInstructions").textContent = text;
+// El texto lo genera el servidor: es el mismo que reciben las sesiones de terminal
+async function renderInstructions() {
+  try {
+    const { text } = await api("/api/instructions");
+    $("#claudeInstructions").textContent = text;
+  } catch (err) {
+    $("#claudeInstructions").textContent = `No se pudieron cargar las instrucciones: ${err.message}`;
+  }
 }
 
 $("#copyInstructionsBtn").addEventListener("click", () => {
@@ -500,34 +1167,8 @@ $("#clearRunsBtn").addEventListener("click", async () => {
   await fetch("/api/runs", { method: "DELETE" });
   runs = [];
   renderTimeline();
+  renderKpis();
 });
-
-// ================= Utilidades =================
-function truncate(s, n) {
-  s = s || "";
-  return s.length > n ? s.slice(0, n) + "…" : s;
-}
-function escapeHtml(s) {
-  const d = document.createElement("div");
-  d.textContent = s ?? "";
-  return d.innerHTML;
-}
-function escapeAttr(s) {
-  return String(s ?? "").replace(/"/g, "&quot;");
-}
-function flash(sel, msg) {
-  $(sel).textContent = msg;
-  setTimeout(() => ($(sel).textContent = ""), 2000);
-}
-
-// ================= Init =================
-async function loadAgents() {
-  agents = await (await fetch("/api/agents")).json();
-  renderAgents();
-  renderAgentsEditor();
-  renderAgentSelect();
-  renderInstructions();
-}
 
 $("#clearPlanBtn").addEventListener("click", async () => {
   await fetch("/api/plan", { method: "DELETE" });
@@ -535,16 +1176,89 @@ $("#clearPlanBtn").addEventListener("click", async () => {
   renderPlan();
 });
 
+// ================= Utilidades =================
+function truncate(s, n) {
+  s = s || "";
+  return s.length > n ? s.slice(0, n) + "…" : s;
+}
+function tail(s, n) {
+  s = s || "";
+  return s.length > n ? "…" + s.slice(-n) : s;
+}
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s ?? "";
+  return d.innerHTML;
+}
+function escapeAttr(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+function flash(sel, msg) {
+  const el = $(sel);
+  const prev = el.textContent;
+  el.textContent = msg;
+  setTimeout(() => {
+    if (el.textContent === msg) el.textContent = sel === "#consoleStatus" ? prev : "";
+  }, 2000);
+}
+function formatSeconds(ms, digits = 1) {
+  return `${(ms / 1000).toFixed(digits)}s`;
+}
+function formatTime(iso) {
+  return new Date(iso).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+function formatCount(n) {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
+}
+// macOS: /Users/<usuario>/... → ~/...
+function tildePath(p) {
+  return (p || "").replace(/^\/Users\/[^/]+/, "~");
+}
+
+// ================= Init =================
+async function loadAgents() {
+  agents = await (await fetch("/api/agents")).json();
+  renderAgents();
+  renderAgentsEditor();
+  renderConsoleAgents();
+  renderInstructions();
+}
+
 async function init() {
   await loadAgents();
   await loadConfig();
   runs = await (await fetch("/api/runs")).json();
   currentPlan = await (await fetch("/api/plan")).json();
+  projects = await (await fetch("/api/projects")).json();
+  sessions = await (await fetch("/api/terminals")).json();
+
+  rebuildAgentState();
+  renderAgents();
+  renderAgentsEditor();
   renderPlan();
   renderTimeline();
+  renderKpis();
+  renderLive();
+  renderSessionUI();
+
+  // Si quedó una sesión abierta (p. ej. tras recargar), volver a conectarla
+  const live = sessions.find((s) => !s.exited);
+  if (live) attachSession(live.id);
+
   await refreshStatus();
   connectStream();
   setInterval(refreshStatus, 6000);
+  // La gráfica de 24 h depende de la hora, no solo de los eventos
+  setInterval(renderKpis, 60000);
+  // Cronómetro de los runs en curso en la pestaña En vivo
+  setInterval(() => {
+    runs
+      .filter((r) => r.status === "running")
+      .forEach((run) => {
+        const el = document.querySelector(`[data-elapsed="${run.id}"]`);
+        if (el) updateElapsed(el, run);
+      });
+  }, 500);
 }
 
 init();
