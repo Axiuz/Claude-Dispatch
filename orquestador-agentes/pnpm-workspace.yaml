@@ -1,0 +1,3 @@
+allowBuilds:
+  # node-pty trae binarios precompilados; su postinstall solo marca spawn-helper como ejecutable
+  node-pty: true
