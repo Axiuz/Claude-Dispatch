@@ -53,6 +53,34 @@
   --red-line: rgba(255, 111, 94, 0.4);
   --violet: #a89bff;
 
+  --syn-comment: #8c9a86;
+  --syn-string: #f0b86e;
+  --syn-number: #7fe0c4;
+  --syn-keyword: #c8a2ff;
+  --syn-control: #ff9d8a;
+  --syn-type: #6fd8ff;
+  --syn-function: #f5d06a;
+  --syn-variable: #e4e0d4;
+  --syn-constant: #ff9d8a;
+  --syn-operator: #b0aea6;
+  --syn-tag: #7fb8ff;
+  --syn-attr: #f5d06a;
+  --syn-regexp: #ffb3a0;
+  --syn-invalid: #ff6f5e;
+
+  --syn-line: #151515;
+  --syn-selection: #4a6fd461;
+  --syn-selection-soft: #4a6fd433;
+  --syn-find: #f0c04052;
+  --syn-guide: #262626;
+  --syn-guide-active: #4a4a4a;
+  --syn-bracket-1: #f5d06a;
+  --syn-bracket-2: #c8a2ff;
+  --syn-bracket-3: #6fd8ff;
+  --syn-bracket-4: #7fe0c4;
+  --syn-bracket-5: #f0b86e;
+  --syn-bracket-6: #ff9d8a;
+
   --shadow: rgba(0, 0, 0, 0.6);
   --backdrop: rgba(0, 0, 0, 0.6);
 
@@ -1003,6 +1031,9 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 
 /* ---------- Editor de código (Monaco) ---------- */
 #tab-editor.tab-panel.active { display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
+.git-wide { width: 100%; margin-top: 8px; }
+.git-remote .row { flex-wrap: wrap; }
+
 .ed-toolbar { display: flex; align-items: center; gap: 10px; flex: none; }
 .ed-toolbar #edPath { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
