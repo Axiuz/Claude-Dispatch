@@ -68,7 +68,9 @@ curl -s -X POST http://localhost:3131/agent/coder \
 
 El `step_id` hace que el paso se marque solo en mi panel cuando el agente termine.
 
-**Pasos independientes entre sí** — lánzalos en paralelo (máximo 4):
+**Pasos independientes entre sí** — mándalos juntos en un lote (hasta 12). No los
+repartas tú: el orquestador ejecuta `max_parallel` a la vez y encola el resto,
+porque más peticiones simultáneas a LM Studio no van más rápido.
 ```bash
 curl -s -X POST http://localhost:3131/delegate \
   -H "Content-Type: application/json" \
@@ -122,6 +124,13 @@ Reglas de contexto:
 - Menciona lenguaje, convenciones y estilo del proyecto.
 - Acota la tarea a una sola cosa.
 - Di explícitamente qué formato quieres de vuelta.
+- Hay un tope de 16000 caracteres por prompt (~4000 tokens). Si te pasas recibes
+  un 413: parte el contexto en trozos o manda tu resumen en lugar del archivo
+  entero. Un prompt más corto también se responde antes.
+
+Si un run se queda sin respuesta del modelo, el orquestador lo corta solo y lo
+deja en error con el motivo; no se queda colgado. Cuando eso pase, el modelo está
+saturado: haz tú el paso y dímelo.
 
 ## Tú eres el coder principal
 

@@ -154,15 +154,27 @@ frontend en `public/app.js` (JavaScript sin frameworks ni build step).
 3. **`updateRun()`** guarda el resultado (duración, tokens estimados como
    `longitud / 4`), emite `run:update` y marca el paso como `done` o `error`.
 
-`POST /delegate` lanza varios runs a la vez con `Promise.allSettled`: si uno
-falla, los demás siguen.
+`POST /delegate` acepta un lote de hasta 12 tareas. No las lanza todas juntas:
+cada run pide turno a una cola global y solo corren `max_parallel` a la vez, en
+estado `queued` mientras esperan. LM Studio sirve un modelo a la vez, así que
+mandarle más peticiones en paralelo no las acelera; multiplica el KV cache y en
+16 GB acaba tirando de swap.
+
+Cada run lleva un `AbortController` con dos relojes: uno de inactividad
+(`stall_timeout_ms`, se rearma con cada token) y un tope total
+(`run_timeout_ms`). Si salta alguno, el run queda en `error` con el motivo y
+libera su turno, en vez de quedarse colgado. `DELETE /api/runs/:id` hace lo mismo
+a mano y lo deja en `cancelled`.
+
+Los prompts de más de `max_prompt_chars` se rechazan con 413: no cabrían en el
+contexto y LM Studio los truncaría por dentro sin avisar.
 
 ### Tiempo real (SSE)
 
 El panel se suscribe a `GET /api/stream` y recibe:
 
 ```
-run:start  run:token  run:update  runs:cleared
+run:start  run:token  run:update  queue:updated  runs:cleared
 plan:new   plan:update  plan:cleared
 agents:updated  projects:updated  terminals:updated
 ```
@@ -212,7 +224,10 @@ no existe se marca como "Suprimido".
 | `model` | `omnicoder-9b` | Identificador del modelo cargado |
 | `app_port` | `3131` | Puerto del orquestador |
 | `max_runs_kept` | `300` | Runs que se conservan en memoria |
-| `max_parallel` | `4` | Máximo de tareas por llamada a `/delegate`; debe coincidir con *Parallel* de LM Studio |
+| `max_parallel` | `1` | Runs que corren a la vez; el resto espera en cola. Conviene igualarlo a *Max Concurrency* de LM Studio |
+| `stall_timeout_ms` | `90000` | Corta el run si el modelo no envía nada en ese tiempo |
+| `run_timeout_ms` | `600000` | Tope duro de duración de un run |
+| `max_prompt_chars` | `16000` | Prompts más largos se rechazan con 413 (~4000 tokens) |
 
 Variables de entorno:
 
@@ -248,6 +263,7 @@ DELETE /api/agents/:id
 
 GET    /api/runs
 GET    /api/runs/:id
+DELETE /api/runs/:id               cancela un run en curso o en cola
 DELETE /api/runs
 POST   /api/test                   {agentId, prompt}
 
@@ -323,8 +339,8 @@ orquestador-agentes/          raíz del repo
   cuando un nombre existe en varios archivos y no hay import que lo desempate, la
   arista se marca como dudosa y se dibuja punteada.
 - Un solo plan a la vez: registrar otro pisa el anterior.
-- No se puede cancelar un run en curso ni hay timeout: si LM Studio se cuelga a
-  mitad de un stream, el run queda en `running`.
+- La cola es global y sin prioridades: un lote largo retrasa a la delegación que
+  llegue después.
 - Runs, plan y métricas viven en memoria; reiniciar los borra.
 - El conteo de tokens es una estimación.
 - El editor de agentes guarda el array completo: dos pestañas editando a la vez
