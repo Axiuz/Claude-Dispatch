@@ -761,10 +761,13 @@ función, ni al final de una línea. Los redacta el documenter cuando cierras la
 tarea, y escribirlos tú es pagar dos veces por el mismo texto: primero tu salida
 al escribirlos y luego la suya al rehacerlos.
 
-Se salva una sola cosa: la decisión que no se deduce leyendo el código. Por qué
-este parseo es tolerante, por qué este orden y no otro, qué rompe si se cambia.
-Eso no puede saberlo el documenter, así que esa línea la escribes tú. Si dudas,
-no la escribas: ya la añadirás al revisar lo que él proponga.
+Lo que el código no dice tampoco lo escribes tú. Por qué este parseo es
+tolerante, por qué este orden y no otro, qué se rompe si se cambia: eso lo sabes
+tú y él no, así que se lo cuentas en el prompt, una línea por decisión, y él lo
+convierte en comentario. Tú pones el porqué, él pone las palabras.
+
+Cero comentarios de tu mano en el código. Si al revisar lo que él propone falta
+algo importante, entonces sí lo añades: es una línea, no un archivo comentado.
 `
     : "";
 
@@ -802,7 +805,9 @@ ${commentRule}
 ## Uso de agentes por defecto
 ${defaultUse}
 Excepciones, las únicas válidas para saltarte un agente de la lista anterior:
-- El cambio es trivial: menos de ~20 líneas y sin lógica nueva.
+- El cambio es trivial: menos de ~20 líneas y sin lógica nueva. Esta no vale para
+  el documenter: si tocaste código, los comentarios se los pides igual. Da lo
+  mismo que sean tres líneas, un run local no te cuesta salida.
 - LM Studio no responde (lo compruebas al empezar).
 - Te pido explícitamente no usar agentes.
 Si aplicas una excepción, di en una línea qué agente omites y cuál excepción es.
