@@ -25,6 +25,10 @@ const MAX_COMMITS = 40;
 const MAX_FILES = 200;
 const MAX_MESSAGE = 5000;
 const MAX_TITLE = 120;
+// Lo que cabe en un asunto de git sin que las herramientas lo trunquen, y el
+// mínimo por debajo del cual partir deja un asunto que no dice nada
+const SUBJECT_MAX = 72;
+const SUBJECT_MIN = 24;
 
 // Encabezados de bloque. Se aceptan con y sin acento, numerados ("COMMIT 2:") y
 // con el valor en la misma línea ("ARCHIVOS: a.js, b.js").
@@ -32,6 +36,9 @@ const HEAD_COMMIT = /^\s*commit\s*(?:#?\d+)?\s*[:.\-—]?\s*(.*)$/i;
 const HEAD_FILES = /^\s*archivos?\s*[:.\-—]?\s*(.*)$/i;
 const HEAD_MESSAGE = /^\s*mensaje\s*[:.\-—]?\s*(.*)$/i;
 const HEAD_END = /^\s*fin\s*[.:]?\s*$/i;
+// El prompt del documenter le ofrece CUERPO para lo que no cabe en el asunto.
+// Sin reconocerlo aquí, la palabra "CUERPO:" acababa dentro del mensaje.
+const HEAD_BODY = /^\s*cuerpos?\s*[:.\-—]?\s*(.*)$/i;
 const FENCE = /^\s*```/;
 const BULLET = /^\s*[-*•]\s+/;
 
@@ -53,6 +60,28 @@ function titleOf(title, message) {
   return t.slice(0, MAX_TITLE);
 }
 
+// Un asunto de git se lee de una ojeada y ninguna herramienta lo recorta: git
+// acepta el párrafo entero y lo deja en el log. El modelo a veces devuelve el
+// MENSAJE como un solo bloque largo, así que se parte por la última frontera de
+// frase o de palabra que quepa y lo que sobra baja al cuerpo, donde no estorba.
+function splitSubject(message) {
+  const text = clean(message);
+  if (!text) return text;
+  const [first, ...body] = text.split("\n");
+  if (first.length <= SUBJECT_MAX) return text;
+
+  const head = first.slice(0, SUBJECT_MAX + 1);
+  // Preferimos cortar donde acaba una frase; si no hay punto, por el último espacio
+  const dot = Math.max(head.lastIndexOf(". "), head.lastIndexOf("; "));
+  const cut = dot > SUBJECT_MIN ? dot + 1 : head.lastIndexOf(" ");
+  if (cut <= SUBJECT_MIN) return text;
+
+  const subject = first.slice(0, cut).replace(/[\s.,;:]+$/, "");
+  const rest = first.slice(cut).trim();
+  const tail = [rest, ...body].filter(Boolean).join("\n");
+  return tail ? `${subject}\n\n${tail}` : subject;
+}
+
 function parseCommitPlan(text) {
   const lines = clean(text).split("\n");
   const commits = [];
@@ -61,7 +90,7 @@ function parseCommitPlan(text) {
 
   const flush = () => {
     if (!current) return;
-    const message = clean(current.message.join("\n"));
+    const message = splitSubject(clean(current.message.join("\n")));
     const files = current.files;
     // Un bloque sin nada dentro no es un commit, es ruido del modelo
     if (message || files.length) {
@@ -101,6 +130,14 @@ function parseCommitPlan(text) {
       if (clean(message[1])) current.message.push(clean(message[1]));
       continue;
     }
+    const body = line.match(HEAD_BODY);
+    if (body) {
+      // Línea en blanco primero: es lo que separa el asunto del cuerpo en git
+      section = "message";
+      if (current.message.length) current.message.push("");
+      if (clean(body[1])) current.message.push(clean(body[1]));
+      continue;
+    }
 
     if (section === "files") current.files.push(...splitFiles(line));
     else if (section === "message") current.message.push(line);
@@ -118,7 +155,7 @@ function normalizeCommits(input) {
 
   for (const raw of list.slice(0, MAX_COMMITS)) {
     if (!raw || typeof raw !== "object") continue;
-    const message = clean(raw.message).slice(0, MAX_MESSAGE);
+    const message = splitSubject(clean(raw.message)).slice(0, MAX_MESSAGE);
     const seen = new Set();
     const files = [];
     for (const f of Array.isArray(raw.files) ? raw.files : []) {
@@ -133,4 +170,4 @@ function normalizeCommits(input) {
   return out;
 }
 
-module.exports = { parseCommitPlan, normalizeCommits, MAX_COMMITS, MAX_FILES, MAX_MESSAGE };
+module.exports = { parseCommitPlan, normalizeCommits, splitSubject, MAX_COMMITS, MAX_FILES, MAX_MESSAGE, SUBJECT_MAX };

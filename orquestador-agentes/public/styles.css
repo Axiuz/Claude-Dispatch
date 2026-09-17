@@ -1,38 +1,37 @@
 :root {
-  /* Paleta de la marca: oro #d4af37, teal #0f7c7c, teal profundo #083c3c,
-     crema #e9e2cf y pizarra #1a1f24. Las superficies salen de la pizarra, el
-     oro es el acento, el teal lo vivo (activo, correcto) y el crema el texto.
-     Todo lee de aquí —panel, Monaco, xterm y el mapa—: no hay colores sueltos
-     fuera de este bloque, así que repintar la app se hace aquí y nada más. */
+  /* Gris neutro, casi negro: las superficies no tienen tinte y el contraste
+     entre niveles es lo que separa carril, panel y hundido. El oro #d4af37 y el
+     crema del texto son la marca.
+     Todo el color de la app sale de este bloque —panel, Monaco, xterm y el
+     mapa—, no hay hex sueltos fuera, así que repintar la app se hace solo aquí. */
 
   /* Superficies, de más oscura a más clara */
-  --bg: #0f1317;
-  --rail: #14181d;
-  --sunken: #12161a;
-  --panel: #1a1f24;
-  --panel-active: #1e242a;
-  --panel-2: #232a31;
-  --panel-3: #2c343c;
+  --bg: #0a0a0a;
+  --rail: #111111;
+  --sunken: #0d0d0d;
+  --panel: #171717;
+  --panel-active: #1f1f1f;
+  --panel-2: #222222;
+  --panel-3: #2e2e2e;
 
-  --border-soft: #202730;
-  --border: #29323a;
-  --border-strong: #35404a;
-  --border-dashed: #3c4852;
-  --ghost: #4a5560;
+  --border-soft: #242424;
+  --border: #333333;
+  --border-strong: #474747;
+  --border-dashed: #525252;
+  --ghost: #6b6b6b;
 
-  --text: #e9e2cf;
-  --text-2: #cdc8b8;
-  --code: #cfd3c8;
-  --muted: #929389;
-  --faint: #7f867f;
+  --text: #f4f1e8;
+  --text-2: #d8d4c8;
+  --code: #dfdfd8;
+  --muted: #a2a29a;
+  --faint: #8a8a82;
 
-  /* Oro del logo */
   --accent: #d4af37;
   --accent-hover: #ecc85a;
   --accent-soft: rgba(212, 175, 55, 0.14);
   --accent-line: rgba(212, 175, 55, 0.45);
   --accent-glow: rgba(212, 175, 55, 0.7);
-  --on-accent: #12161a;
+  --on-accent: #0d0d0d;
 
   /* Teal, el segundo color de la marca. El teal puro es oscuro: sirve para
      fondos y bordes, y --green es su versión legible sobre fondo oscuro. */
@@ -46,10 +45,10 @@
   --green-track: rgba(15, 124, 124, 0.38);
   --amber: #dba13c;
   --amber-soft: rgba(219, 161, 60, 0.12);
-  --red: #e0705c;
-  --red-soft: rgba(224, 112, 92, 0.1);
-  --red-line: rgba(224, 112, 92, 0.32);
-  --violet: #8fb9c9;
+  --red: #e8695a;
+  --red-soft: rgba(232, 105, 90, 0.12);
+  --red-line: rgba(232, 105, 90, 0.34);
+  --violet: #b08ec4;
 
   --shadow: rgba(0, 0, 0, 0.6);
   --backdrop: rgba(0, 0, 0, 0.6);
@@ -318,13 +317,13 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .kcol.progress { --col: var(--accent); }
 .kcol.review { --col: var(--violet); }
 .kcol.done { --col: var(--green); }
-.kcol.approved { --col: var(--green); }
+.kcol.errors { --col: var(--red); }
 .kcol-head {
   display: flex; align-items: center; gap: 7px; padding: 8px 10px;
   border-bottom: 1px solid var(--border-soft);
   background: color-mix(in srgb, var(--col) 12%, transparent);
 }
-.kcol.approved .kcol-head { background: color-mix(in srgb, var(--green) 20%, transparent); }
+.kcol.errors .kcol-head { background: color-mix(in srgb, var(--red) 14%, transparent); }
 .kcol-head .cdot { width: 6px; height: 6px; border-radius: 50%; background: var(--col); }
 .kcol-head .cglyph { font-size: 10px; color: var(--col); opacity: 0.8; }
 .kcol-head .ctitle { font-size: 10.5px; letter-spacing: 0.7px; font-weight: 600; color: var(--col); }
@@ -813,7 +812,7 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 :root {
   --graph-1: #d4af37;
   --graph-2: #2fb3a4;
-  --graph-3: #8fb9c9;
+  --graph-3: #b08ec4;
   --graph-4: #9bbf6e;
   --graph-5: #d98b52;
   --graph-6: #cf7f8e;

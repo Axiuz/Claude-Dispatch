@@ -4,7 +4,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { parseCommitPlan, normalizeCommits, MAX_MESSAGE } = require("../commitplan");
+const { parseCommitPlan, normalizeCommits, splitSubject, MAX_MESSAGE, SUBJECT_MAX } = require("../commitplan");
 
 test("un bloque completo se lee entero, con el cuerpo del mensaje", () => {
   const text = `
@@ -143,4 +143,76 @@ test("normalizeCommits acepta el plan ya en JSON y limpia sus rutas", () => {
     { title: "  con espacios  ", files: [" src/a.js ", "../b.js", ""], message: " Un mensaje " },
   ]);
   assert.deepEqual(out, [{ title: "con espacios", files: ["src/a.js"], message: "Un mensaje" }]);
+});
+
+// El modelo devuelve a veces el mensaje entero en una línea y git lo acepta tal
+// cual: un commit del repo acabó con 261 caracteres de asunto.
+test("un asunto que no cabe se parte, y el resto baja al cuerpo", () => {
+  const largo =
+    "Se agrega el comando git remote en readRepo para detectar si el repositorio " +
+    "tiene remoto configurado, lo que permite diferenciar el estado en el frontend.";
+  const [subject, blank, ...body] = splitSubject(largo).split("\n");
+  assert.ok(subject.length <= SUBJECT_MAX, `asunto de ${subject.length}`);
+  assert.equal(blank, "");
+  assert.ok(body.join("\n").includes("frontend"));
+});
+
+test("un asunto que ya cabe se deja intacto", () => {
+  const corto = "Evita que el sondeo de Git le quite el index.lock al commit";
+  assert.equal(splitSubject(corto), corto);
+});
+
+test("el cuerpo que ya venía se conserva debajo de lo que se parte", () => {
+  const texto = "Asunto larguísimo que no cabe de ninguna manera en una sola línea de git\n\ncuerpo previo";
+  const out = splitSubject(texto);
+  assert.ok(out.split("\n")[0].length <= SUBJECT_MAX);
+  assert.ok(out.includes("cuerpo previo"));
+});
+
+test("una palabra sola no se parte por la mitad aunque pase del límite", () => {
+  const pegado = "y".repeat(120);
+  assert.equal(splitSubject(pegado), pegado);
+});
+
+test("el plan parseado ya trae el asunto partido", () => {
+  const text = `
+COMMIT 1
+ARCHIVOS: git.js
+MENSAJE: Se agrega el comando git remote en readRepo para detectar si el repositorio tiene remoto configurado y diferenciar el estado
+FIN`;
+  const [commit] = parseCommitPlan(text);
+  assert.ok(commit.message.split("\n")[0].length <= SUBJECT_MAX);
+});
+
+test("normalizeCommits parte igual los mensajes que llegan por objeto", () => {
+  const [commit] = normalizeCommits([
+    {
+      files: ["git.js"],
+      message:
+        "Se agrega el comando git remote en readRepo para detectar si el repositorio tiene remoto configurado y diferenciar el estado",
+    },
+  ]);
+  assert.ok(commit.message.split("\n")[0].length <= SUBJECT_MAX);
+});
+
+test("el encabezado CUERPO no acaba dentro del mensaje del commit", () => {
+  const [commit] = parseCommitPlan(`
+COMMIT 1
+ARCHIVOS: git.js
+MENSAJE: detecta si el repositorio tiene remoto
+CUERPO: el frontend decide con esto qué botón enseña
+FIN`);
+  assert.ok(!commit.message.includes("CUERPO"));
+  assert.equal(commit.message.split("\n")[0], "detecta si el repositorio tiene remoto");
+  assert.ok(commit.message.includes("qué botón enseña"));
+});
+
+test("el cuerpo va separado del asunto por una línea en blanco, como pide git", () => {
+  const [commit] = parseCommitPlan(`
+COMMIT 1
+ARCHIVOS: git.js
+MENSAJE: detecta el remoto
+CUERPO: hace falta para el botón
+FIN`);
+  assert.equal(commit.message, "detecta el remoto\n\nhace falta para el botón");
 });
