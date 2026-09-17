@@ -8,6 +8,8 @@ const { buildGraph } = require("./codegraph");
 const { COLUMNS, COLUMN_AFTER_RUN, columnFor, placeStep } = require("./kanban");
 const safepath = require("./safepath");
 const claudeusage = require("./claudeusage");
+const gitinfo = require("./git");
+const commitplan = require("./commitplan");
 
 const DEFAULT_DATA_DIR = path.join(__dirname, "data");
 // La app de macOS pasa ORQ_DATA_DIR para guardar los datos fuera del bundle
@@ -27,6 +29,9 @@ const PROJECTS_PATH = path.join(DATA_DIR, "projects.json");
 // El tablero sí va a disco: desde que se pueden añadir tarjetas a mano, contiene
 // trabajo del usuario y no solo el reflejo de lo que hace Claude Code.
 const PLAN_PATH = path.join(DATA_DIR, "plan.json");
+// Planes de commits, uno por raíz de repositorio. Tampoco se siembra: lleva
+// rutas reales y el trabajo sin commitear del usuario.
+const COMMIT_PLANS_PATH = path.join(DATA_DIR, "commitplans.json");
 
 const loadJSON = (p) => JSON.parse(fs.readFileSync(p, "utf-8"));
 const saveJSON = (p, o) => fs.writeFileSync(p, JSON.stringify(o, null, 2));
@@ -43,6 +48,9 @@ let runs = [];
 // currentPlan: el plan aprobado que Claude Code está ejecutando. A diferencia de
 // los runs, sobrevive al reinicio (ver PLAN_PATH).
 let currentPlan = fs.existsSync(PLAN_PATH) ? loadJSON(PLAN_PATH) : null;
+// commitPlans: el plan de commits de cada repositorio, indexado por su raíz.
+// Va a disco como el tablero, y por la misma razón: es trabajo del usuario.
+let commitPlans = fs.existsSync(COMMIT_PLANS_PATH) ? loadJSON(COMMIT_PLANS_PATH).plans || {} : {};
 // clientes SSE conectados (el panel)
 let sseClients = [];
 
@@ -167,7 +175,9 @@ function gitBranch(dir) {
 
 function projectView(p) {
   const exists = isDirectory(p.path);
-  const session = [...sessions.values()].find((s) => s.cwd === p.path && !s.exited);
+  // El id que interesa al panel es el de la sesión de Claude Code: es la que se
+  // abre al pulsar el proyecto. La shell del dock es secundaria.
+  const session = findSession(p.path, "claude") || findSession(p.path, "shell");
   return {
     ...p,
     exists,
@@ -190,11 +200,21 @@ function touchProject(dir) {
   broadcastProjects();
 }
 
-// ============ Sesiones de terminal (una shell dentro del panel) ============
-// Una sesión = un pty con la shell de login del usuario abierta en la carpeta del
-// proyecto. Es una terminal normal: quien quiera Claude Code lo escribe él mismo.
+// ============ Sesiones de terminal (dos por carpeta) ============
+// Una sesión = un pty con la shell de login del usuario en la carpeta del
+// proyecto. Hay dos tipos, y son terminales distintas, no la misma vista dos
+// veces:
+//   - "claude": la que se ve a tamaño completo en la pestaña Sesión. Arranca
+//     `claude` con las instrucciones del orquestador. Al salir de claude queda
+//     la shell abierta, para no perder el scrollback de la conversación.
+//   - "shell": la del dock del carril derecho. Shell pelada para comandos
+//     sueltos, sin lanzar nada. Se crea bajo demanda, no al abrir el proyecto.
+// La clave es cwd + kind: la misma carpeta puede tener una de cada tipo.
+const SESSION_KINDS = ["claude", "shell"];
 const SCROLLBACK_BYTES = 256 * 1024;
 const sessions = new Map();
+
+const findSession = (cwd, kind) => [...sessions.values()].find((s) => s.cwd === cwd && s.kind === kind && !s.exited);
 
 // Con pnpm el postinstall de node-pty no siempre deja spawn-helper ejecutable,
 // y sin eso falla con "posix_spawnp failed"
@@ -205,7 +225,15 @@ try {
 } catch (_) {}
 
 function sessionView(s) {
-  return { id: s.id, cwd: s.cwd, name: s.name, startedAt: s.startedAt, exited: s.exited, exitCode: s.exitCode };
+  return {
+    id: s.id,
+    cwd: s.cwd,
+    kind: s.kind,
+    name: s.name,
+    startedAt: s.startedAt,
+    exited: s.exited,
+    exitCode: s.exitCode,
+  };
 }
 
 const broadcastSessions = () => broadcast("terminals:updated", [...sessions.values()].map(sessionView));
@@ -216,15 +244,30 @@ function writeSse(res, event, payload) {
   } catch (_) {}
 }
 
-function startSession(cwd, cols, rows) {
+function startSession(cwd, kind, cols, rows) {
   const shell = process.env.SHELL || os.userInfo().shell || "/bin/zsh";
   const env = { ...process.env, SHELL: shell, TERM: "xterm-256color", COLORTERM: "truecolor" };
   delete env.ORQ_DATA_DIR;
   delete env.ORQ_APP_ONLY;
 
-  // -l -i: shell de login e interactiva, con el perfil del usuario cargado. Sin
-  // -c: no lanzamos ningún programa, es la terminal de siempre en esa carpeta.
-  const proc = pty.spawn(shell, ["-l", "-i"], {
+  // -l -i: shell de login e interactiva, con el perfil del usuario cargado, que
+  // es donde está el PATH hacia `claude`.
+  const args = ["-l", "-i"];
+  if (kind === "claude") {
+    // Las instrucciones viajan por variable de entorno: así no hay que escapar
+    // comillas ni saltos de línea dentro del comando de la shell.
+    // --append-system-prompt: sin esto claude solo ve los CLAUDE.md de la
+    // carpeta y no sabe que tiene agentes locales a su disposición.
+    // El `exec` final deja la shell viva al salir de claude, en vez de cerrar
+    // el pty y perder todo el scrollback.
+    env.DISPATCH_INSTRUCTIONS = buildInstructions(cwd);
+    args.push(
+      "-c",
+      'claude --append-system-prompt "$DISPATCH_INSTRUCTIONS"; unset DISPATCH_INSTRUCTIONS; exec "$SHELL" -l -i'
+    );
+  }
+
+  const proc = pty.spawn(shell, args, {
     name: "xterm-256color",
     cwd,
     env,
@@ -235,6 +278,7 @@ function startSession(cwd, cols, rows) {
   const s = {
     id: crypto.randomUUID(),
     cwd,
+    kind,
     name: path.basename(cwd),
     startedAt: new Date().toISOString(),
     exited: false,
@@ -674,7 +718,29 @@ function buildInstructions(project) {
       ? "- reviewer: antes de dar la tarea por terminada, mándale el diff (o las partes\n  clave si es muy grande). Valora sus observaciones; no todas serán correctas."
       : "- La revisión la haces tú, que sí ves el repo completo: el agente reviewer está\n  desactivado. Repasa tu propio diff antes de darme la tarea por terminada.",
     has("documenter")
-      ? "- documenter: si hay que documentar, tú escribes el resumen de hechos (qué se\n  hizo, por qué, archivos, API) y él redacta docstrings o secciones. Tú revisas e\n  integras."
+      ? "- documenter: al cerrar la tarea, antes de reportarme, mándale el código que\n" +
+        "  escribiste o cambiaste y pídele los comentarios. Responde en bloques\n" +
+        "  ARCHIVO / ANCLA / COMENTARIO / FIN: la ANCLA es una línea copiada de tu\n" +
+        "  código, y el comentario va justo encima de ella, con un edit puntual.\n" +
+        "  Mándale solo las funciones, no el archivo entero: lo que no ve no lo\n" +
+        "  comenta, y tiende a comentar constantes e imports si se los enseñas.\n" +
+        "  Para la cabecera de un archivo nuevo, pídesela aparte y dile de qué va el\n" +
+        "  módulo: responde un bloque ARCHIVO / CABECERA / FIN, sin ANCLA.\n" +
+        "  Descarta el bloque que venga sin ANCLA y no sea una CABECERA: es ruido\n" +
+        "  suyo, no lo pegues ni lo arregles.\n" +
+        "  Pégalo tal cual. No lo reescribas para que suene como tú: su explicación\n" +
+        "  suele estar bien, y rehacerla gasta tu salida sin mejorar nada. Complementa\n" +
+        "  solo lo que falte, corrige lo que esté mal y borra lo que sobre.\n" +
+        "  Lo mismo para READMEs y secciones: los redacta él, tú los revisas.\n" +
+        "  Después pídele el plan de commits: le mandas \"PLAN DE COMMITS\" y la lista\n" +
+        "  de archivos que tocaste, uno por línea, con qué cambió en cada uno.\n" +
+        "  Contesta en bloques COMMIT / ARCHIVOS / MENSAJE / FIN. Me lo pasas tal cual,\n" +
+        "  con las rutas que él dio, y además déjamelo puesto en el panel:\n" +
+        `    curl -s -X POST http://localhost:${port}/api/git/plan \\\n` +
+        "      -H \"Content-Type: application/json\" \\\n" +
+        "      -d '{\"path\":\"<ruta del repo>\",\"text\":\"<los bloques tal cual>\"}'\n" +
+        "  Aparece en Control de código y desde ahí preparo y commiteo cada uno.\n" +
+        "  No commitees nada: los commits los ejecuto yo."
       : "- La documentación la escribes tú: el agente documenter está desactivado.",
     has("explainer") && "- explainer: opcional, para resumir código ajeno cuando necesites orientarte.",
     ...enabled
@@ -684,6 +750,28 @@ function buildInstructions(project) {
   const defaultUse = defaultRules.length
     ? defaultRules.join("\n")
     : "- No hay agentes activos: haz todo tú y avísame.";
+
+  // Escribir los comentarios cuesta salida de Claude Code, que es justo lo caro.
+  // Solo se le pide callarlos si hay alguien que los escriba después.
+  const commentRule = has("documenter")
+    ? `
+## Los comentarios no los escribes tú
+Escribe el código sin comentarios y sin docstrings. Ni de cabecera, ni por
+función, ni al final de una línea. Los redacta el documenter cuando cierras la
+tarea, y escribirlos tú es pagar dos veces por el mismo texto: primero tu salida
+al escribirlos y luego la suya al rehacerlos.
+
+Se salva una sola cosa: la decisión que no se deduce leyendo el código. Por qué
+este parseo es tolerante, por qué este orden y no otro, qué rompe si se cambia.
+Eso no puede saberlo el documenter, así que esa línea la escribes tú. Si dudas,
+no la escribas: ya la añadirás al revisar lo que él proponga.
+`
+    : "";
+
+  // El último paso antes de reportar: los comentarios los redacta el documenter
+  const closingNote = has("documenter")
+    ? "\n   Cierra con el documenter: los comentarios del código que tocaste y el\n   plan de commits."
+    : "";
 
   const sessionNote = project
     ? `
@@ -710,7 +798,7 @@ El agente coder es tu refuerzo solo cuando hay demasiado código que escribir:
 - Antes de delegarlo define tú la estructura: firmas, tipos y un ejemplo del
   patrón. El coder rellena; tú revisas e integras.
 - Si es menos que eso, o requiere entender el proyecto, lo escribes tú.
-
+${commentRule}
 ## Uso de agentes por defecto
 ${defaultUse}
 Excepciones, las únicas válidas para saltarte un agente de la lista anterior:
@@ -769,7 +857,7 @@ auth o credenciales (sí puedes pedir revisión).
 
 4) REVISIÓN — Revisa cada respuesta antes de integrarla: el modelo es pequeño y se
    equivoca más que tú. Si viene mal, corrígela tú; no reenvíes la misma tarea al
-   agente. Al terminar, repórtame qué cambió y qué dudas tienes.
+   agente.${closingNote} Al terminar, repórtame qué cambió y qué dudas tienes.
    Cierra con: curl -s -X DELETE http://localhost:${port}/api/plan
 
 ## Reglas
@@ -1281,22 +1369,238 @@ app.post("/api/files/stat", (req, res) => {
   );
 });
 
+// ---- Git (tarjeta del carril derecho) ----
+// Lectura: rama, archivos cambiados y últimos commits de la carpeta que tenga
+// el panel delante. La ruta se valida contra Proyectos igual que el editor, y
+// se cachea unos segundos porque el panel la pide cada pocos. Las operaciones
+// que escriben van más abajo.
+const GIT_CACHE_MS = 2000;
+const gitCache = new Map();
+
+app.get("/api/git", async (req, res) => {
+  const dir = insideProject(req.query.path, { allowSkipped: true });
+  if (!dir || !isDirectory(dir)) return res.status(403).json(FORBIDDEN);
+
+  const cached = gitCache.get(dir);
+  if (!req.query.refresh && cached && Date.now() - cached.at < GIT_CACHE_MS) {
+    return res.json(cached.data);
+  }
+
+  try {
+    const data = await gitinfo.readRepo(dir);
+    gitCache.set(dir, { at: Date.now(), data });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Git (escritura) ----
+// Cambiar de rama, preparar archivos y commitear desde la tarjeta, como en VS
+// Code. La ruta se valida igual que en la lectura: solo carpetas de Proyectos.
+// git se llama siempre con argumentos fijos (ver git.js), nunca por la shell.
+//
+// Un fallo de git no es un 500: se responde 200 con {ok:false, output} y el
+// texto que soltó git, que es lo que explica qué pasó ("Your local changes
+// would be overwritten…"). El 4xx queda para lo que ni llega a git.
+const MAX_COMMIT_MESSAGE = 5000;
+const MAX_GIT_PATHS = 200;
+
+function gitDirOf(req, res) {
+  const raw = req.body && req.body.path !== undefined ? req.body.path : req.query.path;
+  const dir = insideProject(raw, { allowSkipped: true });
+  if (!dir || !isDirectory(dir)) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  return dir;
+}
+
+const gitPaths = (files) => (Array.isArray(files) ? files.slice(0, MAX_GIT_PATHS).map(String) : []);
+
+// Toda escritura responde igual: si salió bien, lo que dijo git, y el estado ya
+// releído, para que el panel se actualice sin esperar a su sondeo de 5 s.
+async function gitWrite(dir, result, res) {
+  gitCache.delete(dir);
+  let data = null;
+  try {
+    data = await gitinfo.readRepo(dir);
+    gitCache.set(dir, { at: Date.now(), data });
+  } catch (_) {}
+  broadcast("git:changed", { path: dir });
+  res.json({ ok: result.ok, output: result.output, git: data });
+}
+
+app.get("/api/git/branches", async (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  try {
+    res.json(await gitinfo.listBranches(dir));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/git/checkout", async (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  const { branch, create, track } = req.body || {};
+  if (typeof branch !== "string") return res.status(400).json({ error: "Falta 'branch'" });
+  await gitWrite(dir, await gitinfo.checkout(dir, { branch, create: !!create, track: !!track }), res);
+});
+
+app.post("/api/git/stage", async (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  await gitWrite(dir, await gitinfo.stage(dir, { files: gitPaths(req.body.files), all: !!req.body.all }), res);
+});
+
+app.post("/api/git/unstage", async (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  await gitWrite(dir, await gitinfo.unstage(dir, { files: gitPaths(req.body.files), all: !!req.body.all }), res);
+});
+
+app.post("/api/git/commit", async (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  const { message = "", amend, all, then } = req.body || {};
+  if (typeof message !== "string") return res.status(400).json({ error: "'message' debe ser texto" });
+  if (message.length > MAX_COMMIT_MESSAGE) return res.status(413).json({ error: `El mensaje pasa de ${MAX_COMMIT_MESSAGE} caracteres` });
+  if (then && then !== "push" && then !== "sync") return res.status(400).json({ error: "'then' debe ser push o sync" });
+
+  let result = await gitinfo.commit(dir, { message, amend: !!amend, all: !!all });
+  // Commit & Push / Commit & Sync: si el commit falla no se sube nada
+  if (result.ok && then) {
+    const after = then === "sync" ? await gitinfo.sync(dir) : await gitinfo.push(dir);
+    result = { ok: after.ok, output: [result.output, after.output].filter(Boolean).join("\n") };
+  }
+  await gitWrite(dir, result, res);
+});
+
+app.post("/api/git/remote", async (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  const ops = { push: gitinfo.push, pull: gitinfo.pull, sync: gitinfo.sync };
+  const action = req.body && req.body.action;
+  if (!ops[action]) return res.status(400).json({ error: "'action' debe ser push, pull o sync" });
+  await gitWrite(dir, await ops[action](dir), res);
+});
+
+// ---- Plan de commits ----
+// El documenter agrupa en commits lo que se tocó y el plan acaba aquí, dentro
+// de la tarjeta de Control de código: preparar los archivos de un commit y
+// escribir su mensaje deja de ser copiar y pegar desde el chat.
+//
+// Se guarda por raíz de repositorio, no por carpeta abierta: cambiar de
+// proyecto cambia el plan solo, igual que el borrador del mensaje, y volver a
+// uno de ayer lo encuentra donde lo dejó.
+const MAX_STORED_PLANS = 50;
+
+function saveCommitPlans() {
+  try {
+    saveJSON(COMMIT_PLANS_PATH, { plans: commitPlans });
+  } catch (err) {
+    console.error("No se pudo guardar el plan de commits:", err.message);
+  }
+}
+
+// La raíz manda: la carpeta abierta puede ser una subcarpeta del repo.
+function repoRootOf(dir) {
+  return gitinfo.findRepoRoot(dir);
+}
+
+const commitPlanView = (root) => ({
+  root,
+  commits: commitPlans[root]?.commits || [],
+  updatedAt: commitPlans[root]?.updatedAt || null,
+});
+
+app.get("/api/git/plan", (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  const root = repoRootOf(dir);
+  if (!root) return res.json({ root: null, commits: [], updatedAt: null });
+  res.json(commitPlanView(root));
+});
+
+// Acepta el texto tal cual lo devuelve el documenter ('text') o el plan ya en
+// JSON ('commits'). Las dos entradas pasan por el mismo normalizador.
+app.post("/api/git/plan", (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  const root = repoRootOf(dir);
+  if (!root) return res.status(400).json({ error: "Esta carpeta no está en un repositorio Git" });
+
+  const { text, commits } = req.body || {};
+  if (text !== undefined && typeof text !== "string") return res.status(400).json({ error: "'text' debe ser texto" });
+  if (commits !== undefined && !Array.isArray(commits)) return res.status(400).json({ error: "'commits' debe ser un array" });
+  if (text === undefined && commits === undefined) return res.status(400).json({ error: "Falta 'text' o 'commits'" });
+
+  const list = commits !== undefined ? commitplan.normalizeCommits(commits) : commitplan.parseCommitPlan(text);
+  if (!list.length) return res.status(400).json({ error: "No se reconoció ningún bloque COMMIT / ARCHIVOS / MENSAJE / FIN" });
+
+  commitPlans[root] = { commits: list, updatedAt: new Date().toISOString() };
+  // Tope de repos guardados: se tiran los planes más viejos, no el de nadie que
+  // esté trabajando ahora
+  const roots = Object.keys(commitPlans);
+  if (roots.length > MAX_STORED_PLANS) {
+    roots
+      .sort((a, b) => String(commitPlans[a].updatedAt).localeCompare(String(commitPlans[b].updatedAt)))
+      .slice(0, roots.length - MAX_STORED_PLANS)
+      .forEach((r) => delete commitPlans[r]);
+  }
+  saveCommitPlans();
+  broadcast("git:plan", { root });
+  res.json(commitPlanView(root));
+});
+
+// Sin 'index' se borra el plan entero; con él, solo ese commit (es lo que hace
+// el panel cuando uno de los commits ya se ejecutó).
+app.delete("/api/git/plan", (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  const root = repoRootOf(dir);
+  if (!root || !commitPlans[root]) return res.json({ root, commits: [], updatedAt: null });
+
+  const index = req.body && req.body.index;
+  if (index === undefined) {
+    delete commitPlans[root];
+  } else {
+    const list = commitPlans[root].commits;
+    if (!Number.isInteger(index) || index < 0 || index >= list.length) {
+      return res.status(400).json({ error: "'index' fuera de rango" });
+    }
+    list.splice(index, 1);
+    commitPlans[root].updatedAt = new Date().toISOString();
+    if (!list.length) delete commitPlans[root];
+  }
+  saveCommitPlans();
+  broadcast("git:plan", { root });
+  res.json(commitPlanView(root));
+});
+
 // ---- Terminal ----
 app.get("/api/terminals", (req, res) => res.json([...sessions.values()].map(sessionView)));
 
-// Abre (o reutiliza) la sesión de claude de una carpeta
+// Abre (o reutiliza) una sesión de una carpeta. `kind` decide cuál de las dos:
+// "claude" (la de la pestaña Sesión) o "shell" (la del dock).
 app.post("/api/terminals", (req, res) => {
   const dir = resolveDir(req.body.path);
   if (!dir || !isDirectory(dir)) return res.status(400).json({ error: "La carpeta no existe" });
 
+  const kind = req.body.kind === undefined ? "claude" : req.body.kind;
+  if (!SESSION_KINDS.includes(kind)) return res.status(400).json({ error: `'kind' debe ser ${SESSION_KINDS.join(" o ")}` });
+
   const cols = clampSize(req.body.cols, 100);
   const rows = clampSize(req.body.rows, 30);
-  let s = [...sessions.values()].find((x) => x.cwd === dir && !x.exited);
+  let s = findSession(dir, kind);
   if (!s) {
-    // Una sesión terminada de la misma carpeta se reemplaza por la nueva
-    [...sessions.values()].filter((x) => x.cwd === dir).forEach(killSession);
+    // Una sesión terminada del mismo tipo y carpeta se reemplaza por la nueva.
+    // La del otro tipo se queda donde está.
+    [...sessions.values()].filter((x) => x.cwd === dir && x.kind === kind).forEach(killSession);
     try {
-      s = startSession(dir, cols, rows);
+      s = startSession(dir, kind, cols, rows);
     } catch (err) {
       return res.status(500).json({ error: `No se pudo abrir la terminal: ${err.message}` });
     }

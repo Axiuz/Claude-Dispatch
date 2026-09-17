@@ -9,3 +9,6 @@ orquestador-agentes/data/projects.json
 
 # Tablero: rutas reales y tarjetas del usuario
 orquestador-agentes/data/plan.json
+
+# Plan de commits por repositorio: rutas reales y trabajo sin commitear
+orquestador-agentes/data/commitplans.json
