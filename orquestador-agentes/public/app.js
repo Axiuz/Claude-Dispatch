@@ -14,7 +14,7 @@ let activeSessionId = null;
 let consoleAgentId = null;
 let selectedParallel = 1;
 // Cuántas delegaciones corren y cuántas esperan turno, según el servidor
-let queueInfo = { active: 0, queued: 0, max_parallel: 1 };
+let queueInfo = { active: 0, queued: 0, max_parallel: 1, models: [] };
 const expandedAgents = new Set();
 
 const PARALLEL_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -815,7 +815,6 @@ function renderKpis() {
   const done = runs.filter((r) => r.status === "done");
   const errors = runs.filter((r) => r.status === "error");
   const running = runs.filter((r) => r.status === "running").length;
-  const queued = runs.filter((r) => r.status === "queued").length;
   const todayCount = runs.filter((r) => new Date(r.startedAt).toDateString() === today).length;
   const avgMs = done.length ? done.reduce((sum, r) => sum + (r.durationMs || 0), 0) / done.length : null;
   const tokens = done.reduce((sum, r) => sum + (r.tokensApprox || 0), 0);
@@ -833,7 +832,7 @@ function renderKpis() {
     {
       label: "EN CURSO",
       value: running,
-      sub: queued ? `${queued} en cola · máx. ${maxParallel()} a la vez` : `máx. ${maxParallel()} a la vez`,
+      sub: laneSummary(),
       always: true,
     },
     { label: "SESIONES", value: liveSessions, sub: "terminales abiertas", always: true },
@@ -939,7 +938,6 @@ function liveRuns() {
   return runs.filter((r) => shown.has(r));
 }
 
-const maxParallel = () => queueInfo.max_parallel || config.max_parallel || 1;
 
 function renderLive() {
   const grid = $("#liveGrid");
@@ -1006,13 +1004,20 @@ function updateLivePane(pane, run) {
   });
 }
 
-function liveStateText(run) {
-  if (run.status === "done") return "hecho";
-  if (run.status === "error") return "error";
-  if (run.status === "cancelled") return "cancelado";
-  if (run.status === "queued") return "en cola";
-  if (run.response) return "escribiendo";
-  return run.reasoning ? "pensando" : "esperando al modelo";
+// ================= Cola por modelo =================
+const maxParallel = () => queueInfo.max_parallel || config.max_parallel || 1;
+
+// "qwen/qwen3-4b-2507" → "qwen3-4b-2507": en el panel el editor ya no cabe
+const shortModel = (id) => String(id || "").split("/").pop();
+
+// Una cola por modelo: el KPI dice qué está corriendo en cada uno, porque dos
+// runs de modelos distintos sí van a la vez y dos del mismo no
+function laneSummary() {
+  const lanes = (queueInfo.models || []).filter((m) => m.active || m.queued);
+  if (!lanes.length) return `máx. ${maxParallel()} por modelo`;
+  return lanes
+    .map((m) => `${shortModel(m.model)} ${m.active}${m.queued ? ` +${m.queued} en cola` : ""}`)
+    .join(" · ");
 }
 
 // Aborta el stream en el servidor; el run vuelve por SSE como "cancelled"
@@ -1164,6 +1169,10 @@ function renderAgentsEditor() {
           <div>
             <label class="field-label">MAX TOKENS</label>
             <input type="number" class="mono" step="50" min="100" data-id="${a.id}" data-field="max_tokens" value="${a.max_tokens ?? 1200}" />
+          </div>
+          <div>
+            <label class="field-label">MODELO</label>
+            <select class="mono" data-id="${a.id}" data-field="model">${modelOptions(a.model)}</select>
           </div>
           <div class="emoji-field">
             <label class="field-label">EMOJI</label>
@@ -1322,6 +1331,7 @@ async function refreshStatus() {
       reach.className = data.warning ? "reach warn" : "reach ok";
       reach.textContent = data.warning ? "⚠ sin modelo" : "✓ responde";
       $("#infoModels").textContent = data.models?.length ? data.models.join(", ") : "ninguno cargado";
+      refreshModelSelects();
     } else {
       pill.className = "status-pill bad";
       $("#statusDot").className = "dot bad";
@@ -1385,6 +1395,32 @@ $("#saveConfigBtn").addEventListener("click", async () => {
 
 // ================= Instrucciones para Claude Code =================
 // El texto lo genera el servidor: es el mismo que reciben las sesiones de terminal
+// El editor se dibuja antes de la primera consulta de estado, así que los
+// desplegables nacen vacíos: al llegar la lista los rellenamos sin re-renderizar
+// el editor entero, para no pisar lo que se esté escribiendo en otro campo.
+let modelSelectsKey = null;
+function refreshModelSelects() {
+  const key = (lastStatus?.models || []).join(",");
+  if (key === modelSelectsKey) return;
+  modelSelectsKey = key;
+  $$('#agentsEditor select[data-field="model"]').forEach((sel) => {
+    sel.innerHTML = modelOptions(sel.value || "");
+  });
+}
+
+// Vacío = el modelo de config.json. Mantiene el que ya tenga el agente aunque
+// LM Studio no lo reporte cargado ahora mismo, para no perderlo al guardar.
+function modelOptions(current) {
+  const loaded = lastStatus?.models || [];
+  const all = [...new Set([...loaded, current].filter(Boolean))];
+  const opts = [`<option value=""${current ? "" : " selected"}>por defecto (${escapeHtml(config.model || "—")})</option>`];
+  all.forEach((m) => {
+    const falta = !loaded.includes(m) ? " · sin cargar" : "";
+    opts.push(`<option value="${escapeAttr(m)}"${m === current ? " selected" : ""}>${escapeHtml(m)}${falta}</option>`);
+  });
+  return opts.join("");
+}
+
 async function renderInstructions() {
   try {
     const { text } = await api("/api/instructions");

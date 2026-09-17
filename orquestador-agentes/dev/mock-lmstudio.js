@@ -8,7 +8,9 @@ const http = require("http");
 
 // MOCK_PORT permite usarlo con LM Studio real abierto en el 1234
 const PORT = parseInt(process.env.MOCK_PORT, 10) || 1234;
-const MODEL = "omnicoder-9b";
+// Los mismos dos que corren en LM Studio: uno por par de agentes. Así se puede
+// probar la cola por modelo sin cargar nada.
+const MODELS = ["qwen/qwen3-4b-2507", "google/gemma-3-4b"];
 
 function streamReply(res, text, thinking = "", everyMs = 40) {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
@@ -35,14 +37,14 @@ http
     if (req.method === "GET" && req.url === "/v1/models") {
       res.writeHead(200, { "Content-Type": "application/json" });
       // MOCK_SIN_MODELO simula el servidor encendido sin modelo cargado
-      return res.end(JSON.stringify({ data: process.env.MOCK_SIN_MODELO ? [] : [{ id: MODEL }] }));
+      return res.end(JSON.stringify({ data: process.env.MOCK_SIN_MODELO ? [] : MODELS.map((id) => ({ id })) }));
     }
 
     if (req.method === "POST" && req.url === "/v1/chat/completions") {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
-        const { messages = [] } = JSON.parse(body || "{}");
+        const { messages = [], model = MODELS[0] } = JSON.parse(body || "{}");
         const prompt = messages.at(-1)?.content || "";
         if (prompt.includes("FORZAR_CUELGUE")) {
           // Un LM Studio saturado: acepta la petición y nunca escribe nada
@@ -55,7 +57,7 @@ http
         }
         const reply =
           "function isValidEmail(email) {\n  const re = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n  return re.test(String(email));\n}\n\n" +
-          `Respuesta simulada para: ${prompt.slice(0, 80)}`;
+          `Respuesta simulada de ${model} para: ${prompt.slice(0, 80)}`;
         const thinking = prompt.includes("FORZAR_RAZONAMIENTO")
           ? "El usuario pide validar un email. Una regex sencilla basta: algo antes de la arroba, dominio y extensión. No hace falta cubrir todo el RFC 5322."
           : "";

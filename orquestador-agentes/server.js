@@ -54,10 +54,11 @@ function broadcast(event, payload) {
   });
 }
 
-function createRun({ agentId, prompt, source, meta }) {
+function createRun({ agentId, model, prompt, source, meta }) {
   const run = {
     id: crypto.randomUUID(),
     agentId,
+    model: model || config.model,
     prompt,
     source: source || "desconocido",
     meta: meta || {},
@@ -300,12 +301,14 @@ const clampSize = (n, fallback) => {
 };
 
 // ============ Cola de delegaciones ============
-// LM Studio sirve un modelo a la vez: mandarle varias peticiones juntas no las
-// hace más rápidas, multiplica el KV cache y en 16 GB unificados acaba en swap.
-// Las delegaciones piden turno aquí; la que no lo consigue espera en "queued" y
-// entra cuando otra termina.
+// Mandarle varias peticiones juntas al mismo modelo no las hace más rápidas,
+// multiplica el KV cache y en 16 GB unificados acaba en swap. Por eso hay una
+// cola por modelo: la delegación pide turno en el carril de SU modelo, y la que
+// no lo consigue espera en "queued" hasta que termine otra de ese mismo modelo.
+// Con dos modelos cargados (uno por par de agentes) dos runs corren de verdad
+// a la vez sin pelearse por el mismo slot de LM Studio.
 const RUN_DEFAULTS = {
-  max_parallel: 1,
+  max_parallel: 1, // por modelo, no en total: igualarlo a Max Concurrency de LM Studio
   stall_timeout_ms: 90000, // sin recibir un solo token del modelo
   run_timeout_ms: 600000, // tope duro por run, por si el modelo entra en bucle
   max_prompt_chars: 16000, // ~4000 tokens: deja sitio a la respuesta en 8192 de contexto
@@ -316,50 +319,89 @@ const MAX_BATCH = 12; // tareas por lote en /delegate; la cola las sirve de a ma
 // Todos estos valores viven en config.json y se pueden cambiar desde el panel
 const setting = (key) => (Number(config[key]) > 0 ? Number(config[key]) : RUN_DEFAULTS[key]);
 
-let activeRuns = 0;
-const queue = [];
+// Un carril por modelo. Cada modelo cargado en LM Studio atiende de a una
+// petición (Max Concurrency 1), así que dos runs del mismo modelo se estorban;
+// dos de modelos distintos no. De ahí sale el paralelismo real: el coder de
+// Qwen y el documenter de Gemma corren a la vez, dos coders se encolan.
+const lanes = new Map(); // modelo -> { active, queue: [tickets] }
 // Lo que está corriendo o esperando turno, para poder cancelarlo por id
 const inFlight = new Map();
 
-const queueState = () => ({ active: activeRuns, queued: queue.length, max_parallel: setting("max_parallel") });
+function laneFor(model) {
+  let lane = lanes.get(model);
+  if (!lane) lanes.set(model, (lane = { active: 0, queue: [] }));
+  return lane;
+}
+
+// Un carril sin nada corriendo ni esperando no se muestra ni ocupa memoria
+function dropLaneIfIdle(model) {
+  const lane = lanes.get(model);
+  if (lane && !lane.active && !lane.queue.length) lanes.delete(model);
+}
+
+const queueState = () => {
+  const models = [...lanes.entries()].map(([model, lane]) => ({
+    model,
+    active: lane.active,
+    queued: lane.queue.length,
+  }));
+  return {
+    // Los totales siguen ahí: el panel viejo y /api/status los leen igual
+    active: models.reduce((n, m) => n + m.active, 0),
+    queued: models.reduce((n, m) => n + m.queued, 0),
+    max_parallel: setting("max_parallel"), // por modelo, no global
+    models,
+  };
+};
 const broadcastQueue = () => broadcast("queue:updated", queueState());
 
-// Devuelve null si hay turno libre, o un ticket que se resuelve cuando lo haya
-function takeSlot() {
-  if (activeRuns < setting("max_parallel")) {
-    activeRuns++;
+// Devuelve null si hay turno libre en ese modelo, o un ticket que se resuelve
+// cuando lo haya
+function takeSlot(model) {
+  const lane = laneFor(model);
+  if (lane.active < setting("max_parallel")) {
+    lane.active++;
     return null;
   }
-  const ticket = {};
+  const ticket = { model };
   ticket.promise = new Promise((resolve, reject) => {
     ticket.resolve = resolve;
     ticket.reject = reject;
   });
-  queue.push(ticket);
+  lane.queue.push(ticket);
   return ticket;
 }
 
-// Al terminar un run su turno pasa al primero de la cola, no se libera
-function freeSlot() {
-  const next = queue.shift();
+// Al terminar un run su turno pasa al primero que espera por ese mismo modelo,
+// no se libera: el turno de Qwen no sirve para arrancar un run de Gemma.
+function freeSlot(model) {
+  const lane = laneFor(model);
+  const next = lane.queue.shift();
   if (next) next.resolve();
-  else activeRuns = Math.max(0, activeRuns - 1);
+  else lane.active = Math.max(0, lane.active - 1);
+  dropLaneIfIdle(model);
   broadcastQueue();
 }
 
 // Si se sube max_parallel desde el panel, los que esperan entran en ese momento;
 // si no, no arrancaría ninguno hasta que terminara el run en curso.
 function fillFreeSlots() {
-  while (queue.length && activeRuns < setting("max_parallel")) {
-    activeRuns++;
-    queue.shift().resolve();
+  for (const [model, lane] of lanes) {
+    while (lane.queue.length && lane.active < setting("max_parallel")) {
+      lane.active++;
+      lane.queue.shift().resolve();
+    }
+    dropLaneIfIdle(model);
   }
   broadcastQueue();
 }
 
 function dropFromQueue(ticket) {
-  const i = queue.indexOf(ticket);
-  if (i >= 0) queue.splice(i, 1);
+  const lane = lanes.get(ticket.model);
+  if (!lane) return;
+  const i = lane.queue.indexOf(ticket);
+  if (i >= 0) lane.queue.splice(i, 1);
+  dropLaneIfIdle(ticket.model);
 }
 
 // El prompt entero entra al contexto del modelo: si se pasa, LM Studio lo trunca
@@ -374,7 +416,10 @@ function promptTooLong(prompt) {
 
 // ============ Llamada a LM Studio (con streaming) ============
 async function runAgent({ agent, prompt, source, meta, overrides = {} }) {
-  const run = createRun({ agentId: agent.id, prompt, source, meta });
+  // Cada agente puede fijar su modelo; si no lo hace, usa el de config.json.
+  // Se resuelve aquí y no al armar el body porque decide en qué carril espera.
+  const model = overrides.model || agent.model || config.model;
+  const run = createRun({ agentId: agent.id, model, prompt, source, meta });
   const controller = new AbortController();
   const entry = { run, ticket: null, reason: null };
 
@@ -398,7 +443,7 @@ async function runAgent({ agent, prompt, source, meta, overrides = {} }) {
   let totalTimer = null;
 
   try {
-    entry.ticket = takeSlot();
+    entry.ticket = takeSlot(model);
     if (entry.ticket) {
       broadcastQueue();
       await entry.ticket.promise; // se resuelve cuando otro run libera su turno
@@ -416,7 +461,7 @@ async function runAgent({ agent, prompt, source, meta, overrides = {} }) {
     });
 
     const body = {
-      model: overrides.model || config.model,
+      model,
       messages: [
         { role: "system", content: agent.system_prompt },
         { role: "user", content: prompt },
@@ -524,7 +569,7 @@ async function runAgent({ agent, prompt, source, meta, overrides = {} }) {
     clearTimeout(stallTimer);
     clearTimeout(totalTimer);
     inFlight.delete(run.id);
-    if (hasSlot) freeSlot();
+    if (hasSlot) freeSlot(model);
     else broadcastQueue();
   }
 }
@@ -606,14 +651,17 @@ function buildInstructions(project) {
   const port = config.app_port || 3131;
   const enabled = getAgents().filter((a) => a.enabled !== false);
   const has = (id) => enabled.some((a) => a.id === id);
-  const list = enabled.map((a) => `- ${a.id} (${a.name}): ${a.use_when}`).join("\n");
+  const list = enabled
+    .map((a) => `- ${a.id} (${a.name}): ${a.use_when}${a.model && a.model !== config.model ? ` [modelo: ${a.model}]` : ""}`)
+    .join("\n");
 
   // Solo se nombran los agentes activos: si uno está apagado, Claude no debe contar con él
   const defaultRules = [
     has("tester") &&
       "- tester: si escribiste o cambiaste lógica, pídele los tests unitarios de esa\n  lógica. Revísalos y ajústalos tú antes de integrarlos.",
-    has("reviewer") &&
-      "- reviewer: antes de dar la tarea por terminada, mándale el diff (o las partes\n  clave si es muy grande). Valora sus observaciones; no todas serán correctas.",
+    has("reviewer")
+      ? "- reviewer: antes de dar la tarea por terminada, mándale el diff (o las partes\n  clave si es muy grande). Valora sus observaciones; no todas serán correctas."
+      : "- La revisión la haces tú, que sí ves el repo completo: el agente reviewer está\n  desactivado. Repasa tu propio diff antes de darme la tarea por terminada.",
     has("documenter")
       ? "- documenter: si hay que documentar, tú escribes el resumen de hechos (qué se\n  hizo, por qué, archivos, API) y él redacta docstrings o secciones. Tú revisas e\n  integras."
       : "- La documentación la escribes tú: el agente documenter está desactivado.",
@@ -637,8 +685,8 @@ Cuando registres un plan usa "project": "${project}".
   return `# Flujo con agentes de IA locales
 
 Eres el orquestador: tú lees mis archivos y tocas mi código. Tienes agentes locales
-(un modelo de 9B en LM Studio) a tu disposición para lo que necesites. No leen
-archivos ni recuerdan nada: todo el contexto se lo pasas tú en el prompt.
+en LM Studio a tu disposición para lo que necesites. Son modelos pequeños: no leen
+archivos ni recuerdan nada, todo el contexto se lo pasas tú en el prompt.
 ${sessionNote}
 ## Agentes disponibles
 ${list}
@@ -703,9 +751,10 @@ auth o credenciales (sí puedes pedir revisión).
      curl -s -X POST http://localhost:${port}/delegate \\
        -H "Content-Type: application/json" \\
        -d '{"tasks":[{"agent":"tester","prompt":"...","step_id":"step-3"}]}'
-   Mándalos todos juntos sin repartirlos tú: el orquestador ejecuta ${setting(
-     "max_parallel"
-   )} a la vez y encola el resto. Más peticiones simultáneas no van más rápido.
+   Mándalos todos juntos sin repartirlos tú: cada agente corre en el modelo que
+   tiene asignado y hay una cola por modelo, de ${setting("max_parallel")} a la vez.
+   Tareas de agentes con modelos distintos corren en paralelo; dos del mismo modelo
+   se encolan. Mandar más peticiones juntas al mismo modelo no las acelera.
 
 4) REVISIÓN — Revisa cada respuesta antes de integrarla: el modelo es pequeño y se
    equivoca más que tú. Si viene mal, corrígela tú; no reenvíes la misma tarea al
@@ -742,6 +791,7 @@ app.get("/api/manifest", (req, res) => {
         id: a.id,
         name: a.name,
         use_when: a.use_when,
+        model: a.model || config.model,
         endpoint: `POST /agent/${a.id}`,
       })),
     notes: [
@@ -837,16 +887,29 @@ app.post("/delegate", async (req, res) => {
 // ---- Estado de LM Studio ----
 app.get("/api/status", async (req, res) => {
   try {
-    const r = await fetch(`${config.lmstudio_url}/v1/models`, { signal: AbortSignal.timeout(3000) });
-    if (!r.ok) throw new Error(`status ${r.status}`);
-    const data = await r.json();
-    const models = (data.data || []).map((m) => m.id);
-    // LM Studio responde aunque no tenga nada cargado: sin esto el panel dice
-    // que todo va bien y las delegaciones fallan una a una.
+    // /v1/models lista todo lo DESCARGADO, cargado o no: con él, un modelo que
+    // nadie cargó parece disponible y las delegaciones fallan una a una. La API
+    // propia de LM Studio sí dice el estado de cada uno; si no existe (versión
+    // vieja), se cae a /v1/models y se da por cargado lo que liste.
+    let models = [];
+    const nativa = await fetch(`${config.lmstudio_url}/api/v0/models`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
+    if (nativa?.ok) {
+      const data = await nativa.json();
+      models = (data.data || []).filter((m) => m.state === "loaded" && m.type !== "embeddings").map((m) => m.id);
+    } else {
+      const r = await fetch(`${config.lmstudio_url}/v1/models`, { signal: AbortSignal.timeout(3000) });
+      if (!r.ok) throw new Error(`status ${r.status}`);
+      const data = await r.json();
+      models = (data.data || []).map((m) => m.id);
+    }
+    // Con un modelo por agente ya no basta con mirar config.model: falta cualquiera
+    // de los que un agente activo tenga fijado y el panel debe decir cuál.
+    const needed = [...new Set([config.model, ...getAgents().filter((a) => a.enabled !== false).map((a) => a.model)].filter(Boolean))];
+    const missing = needed.filter((m) => !models.includes(m));
     const warning = !models.length
       ? "LM Studio responde pero no tiene ningún modelo cargado"
-      : config.model && !models.includes(config.model)
-      ? `El modelo '${config.model}' no está cargado. Cargados: ${models.join(", ")}`
+      : missing.length
+      ? `Sin cargar: ${missing.join(", ")}. Cargados: ${models.join(", ")}`
       : null;
     res.json({ reachable: true, models, model_loaded: models.length > 0, warning, queue: queueState(), config });
   } catch (err) {
@@ -879,6 +942,7 @@ app.post("/api/agents/new", (req, res) => {
     system_prompt: req.body.system_prompt || "Eres un agente asistente.",
     temperature: 0.3,
     max_tokens: 1200,
+    model: req.body.model || "",
     enabled: true,
   });
   saveJSON(AGENTS_PATH, agentsFile);
