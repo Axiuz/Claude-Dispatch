@@ -8,7 +8,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { parseBranchLine, parseTrack, parseStatus, parseLog, parseBranches, markUnpushed, branchNameError, relPathError, commitArgs, checkoutArgs } = require("../git");
+const { parseBranchLine, parseTrack, parseStatus, parseLog, parseBranches, markUnpushed, branchNameError, relPathError, commitArgs, checkoutArgs, isLockError } = require("../git");
 
 const FIELD = "\x1f";
 const RECORD = "\x1e";
@@ -289,4 +289,75 @@ test("cambiar, crear y sacar una remota son tres órdenes distintas", () => {
   assert.deepEqual(checkoutArgs({ branch: "main" }), ["switch", "main"]);
   assert.deepEqual(checkoutArgs({ branch: "nueva", create: true }), ["switch", "-c", "nueva"]);
   assert.deepEqual(checkoutArgs({ branch: "origin/feat", track: true }), ["switch", "--track", "origin/feat"]);
+});
+
+test("isLockError reconoce el lock de git y deja pasar lo demás", () => {
+  assert.ok(isLockError("fatal: Unable to create '/Users/x/repo/.git/index.lock': File exists."));
+  assert.ok(isLockError("Unable to create .git/refs/heads/main.lock"));
+  assert.ok(!isLockError("nothing to commit, working tree clean"));
+  assert.ok(!isLockError("error: pathspec 'rama' did not match any file(s)"));
+  assert.ok(!isLockError(""));
+  assert.ok(!isLockError(null));
+  assert.ok(!isLockError(undefined));
+});
+
+// serialize() no se exporta: es un detalle de runGit(). La copia de aquí tiene
+// que seguir igual que la de git.js, y es lo que se prueba.
+const writeLocks = new Map();
+function serialize(key, fn) {
+  const prev = writeLocks.get(key) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  const tail = run.then(() => {}, () => {});
+  writeLocks.set(key, tail);
+  tail.then(() => {
+    if (writeLocks.get(key) === tail) writeLocks.delete(key);
+  });
+  return run;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test("serialize no deja que dos operaciones de la misma clave se solapen", async () => {
+  const log = [];
+  const task = (name) => async () => {
+    log.push(`${name}:inicio`);
+    await sleep(20);
+    log.push(`${name}:fin`);
+    return name;
+  };
+
+  const [a, b] = await Promise.all([serialize("repo", task("a")), serialize("repo", task("b"))]);
+
+  assert.equal(a, "a");
+  assert.equal(b, "b");
+  assert.deepEqual(log, ["a:inicio", "a:fin", "b:inicio", "b:fin"]);
+});
+
+test("una operación que falla no bloquea la cola de su clave", async () => {
+  const fallo = serialize("repo", async () => {
+    throw new Error("boom");
+  });
+  const siguiente = serialize("repo", async () => "sigue");
+
+  await assert.rejects(fallo, /boom/);
+  assert.equal(await siguiente, "sigue");
+});
+
+test("dos repositorios distintos corren en paralelo", async () => {
+  const log = [];
+  const task = (name) => async () => {
+    log.push(`${name}:inicio`);
+    await sleep(20);
+    log.push(`${name}:fin`);
+  };
+
+  await Promise.all([serialize("uno", task("uno")), serialize("dos", task("dos"))]);
+
+  assert.deepEqual(log, ["uno:inicio", "dos:inicio", "uno:fin", "dos:fin"]);
+});
+
+test("la clave se olvida cuando su cola se vacía", async () => {
+  await serialize("efímero", async () => "listo");
+  await sleep(0);
+  assert.equal(writeLocks.has("efímero"), false);
 });

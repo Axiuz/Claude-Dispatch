@@ -16,6 +16,7 @@ const MAX_COMMITS = 30;
 const GIT_TIMEOUT_MS = 5000;
 const MAX_BUFFER = 4 * 1024 * 1024;
 const NET_TIMEOUT_MS = 60000;
+const LOCK_RETRY_MS = 300;
 
 // Nada puede quedarse esperando a que alguien escriba: un push que pide
 // credenciales o un pull que abre el editor colgarían el proceso hasta el
@@ -182,20 +183,48 @@ function findRepoRoot(dir, { maxUp = 8 } = {}) {
 
 const isRepo = (dir) => findRepoRoot(dir) !== null;
 
+// --no-optional-locks: `git status` refresca el índice y para eso toma
+// .git/index.lock. El panel lo llama cada 5 s, así que sin esta bandera el
+// sondeo le quita el lock al `git add` del plan de commits y el commit muere con
+// "Unable to create index.lock". Con ella, leer no bloquea nunca.
 function git(dir, args, { timeout = GIT_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
-      args,
+      ["--no-optional-locks", ...args],
       { cwd: dir, timeout, maxBuffer: MAX_BUFFER, encoding: "utf-8", windowsHide: true, env: GIT_ENV },
       (err, stdout) => (err ? reject(err) : resolve(stdout))
     );
   });
 }
 
+const LOCK_ERROR = /\.lock['"]?:?\s*File exists|Unable to create .*\.lock/i;
+
+function isLockError(output) {
+  return LOCK_ERROR.test(String(output || ""));
+}
+
+// Una escritura a la vez por repositorio. El lock de git es del repo entero, así
+// que dos operaciones nuestras en paralelo —el sondeo que repinta, dos pestañas,
+// un doble clic en el plan— se pisarían igual que se pisan dos `git add`.
+const writeLocks = new Map();
+
+function serialize(key, fn) {
+  const prev = writeLocks.get(key) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  const tail = run.then(() => {}, () => {});
+  writeLocks.set(key, tail);
+  tail.then(() => {
+    if (writeLocks.get(key) === tail) writeLocks.delete(key);
+  });
+  return run;
+}
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // Como `git()` pero sin lanzar, para las operaciones de escritura: ahí lo que
 // git escribe en stderr es justo lo que hay que enseñar, falle o no.
-function runGit(dir, args, { timeout = GIT_TIMEOUT_MS } = {}) {
+function execGit(dir, args, timeout) {
   return new Promise((resolve) => {
     execFile(
       "git",
@@ -209,6 +238,18 @@ function runGit(dir, args, { timeout = GIT_TIMEOUT_MS } = {}) {
         resolve({ ok: !err, stdout: String(stdout || ""), stderr: String(stderr || ""), output: output || (err ? err.message : "") });
       }
     );
+  });
+}
+
+function runGit(dir, args, { timeout = GIT_TIMEOUT_MS } = {}) {
+  return serialize(findRepoRoot(dir) || dir, async () => {
+    const first = await execGit(dir, args, timeout);
+    // El lock puede ser de un git de fuera —la terminal, Claude Code— y esos no
+    // pasan por nuestra cola. Suelen durar milisegundos: un reintento ahorra el
+    // fallo sin esconder un lock de verdad atascado.
+    if (first.ok || !isLockError(first.output)) return first;
+    await wait(LOCK_RETRY_MS);
+    return execGit(dir, args, timeout);
   });
 }
 
@@ -438,6 +479,7 @@ module.exports = {
   markUnpushed,
   branchNameError,
   relPathError,
+  isLockError,
   commitArgs,
   checkoutArgs,
   // lectura
