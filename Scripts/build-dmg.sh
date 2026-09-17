@@ -1,49 +1,53 @@
 #!/bin/bash
-# Genera dist/Dispatch-<versión>.dmg con herramientas que ya trae macOS.
+# Genera dist/Singularity-<versión>.dmg con herramientas que ya trae macOS.
 # Uso: bash Scripts/build-dmg.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/orquestador-agentes"
 DIST="$ROOT/dist"
-APP="$DIST/Dispatch.app"
+# Se compila aparte y se cambia al final: un rebuild lanzado desde el propio
+# panel borraría la app que lo está ejecutando si trabajáramos sobre dist.
+WORK="$DIST/.next"
+APP="$WORK/Singularity.app"
+FINAL="$DIST/Singularity.app"
 VERSION="$(node -p "require('$SRC/package.json').version")"
-DMG="$DIST/Dispatch-$VERSION.dmg"
+DMG="$DIST/Singularity-$VERSION.dmg"
 
-echo "→ Compilando Dispatch.app $VERSION"
-rm -rf "$DIST"
-mkdir -p "$DIST"
+echo "→ Compilando Singularity.app $VERSION"
+rm -rf "$WORK"
+mkdir -p "$WORK"
 RES="$APP/Contents/Resources"
 mkdir -p "$APP/Contents/MacOS" "$RES"
 
 # Binario universal (Apple Silicon + Intel)
-BIN="$APP/Contents/MacOS/Dispatch"
+BIN="$APP/Contents/MacOS/Singularity"
 for arch in arm64 x86_64; do
-  swiftc -O -target "$arch-apple-macos13" -o "$DIST/Dispatch-$arch" "$ROOT/macos/Dispatch.swift"
+  swiftc -O -target "$arch-apple-macos13" -o "$WORK/Singularity-$arch" "$ROOT/macos/Singularity.swift"
 done
-lipo -create -output "$BIN" "$DIST/Dispatch-arm64" "$DIST/Dispatch-x86_64"
-rm "$DIST/Dispatch-arm64" "$DIST/Dispatch-x86_64"
+lipo -create -output "$BIN" "$WORK/Singularity-arm64" "$WORK/Singularity-x86_64"
+rm "$WORK/Singularity-arm64" "$WORK/Singularity-x86_64"
 
 echo "→ Generando el icono"
-ICONSET="$DIST/Dispatch.iconset"
+ICONSET="$WORK/Singularity.iconset"
 mkdir -p "$ICONSET"
-swift "$ROOT/macos/make-icon.swift" "$ROOT/macos/logo.jpg" "$DIST/icon-1024.png"
+swift "$ROOT/macos/make-icon.swift" "$ROOT/macos/logo-singularity.jpg" "$WORK/icon-1024.png"
 for size in 16 32 128 256 512; do
-  sips -z $size $size "$DIST/icon-1024.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-  sips -z $((size * 2)) $((size * 2)) "$DIST/icon-1024.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+  sips -z $size $size "$WORK/icon-1024.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+  sips -z $((size * 2)) $((size * 2)) "$WORK/icon-1024.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns -o "$RES/AppIcon.icns" "$ICONSET"
-rm -rf "$ICONSET" "$DIST/icon-1024.png"
+rm -rf "$ICONSET" "$WORK/icon-1024.png"
 
 cat >"$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleExecutable</key><string>Dispatch</string>
-  <key>CFBundleIdentifier</key><string>com.axiuz.dispatch</string>
-  <key>CFBundleName</key><string>Dispatch</string>
-  <key>CFBundleDisplayName</key><string>Dispatch</string>
+  <key>CFBundleExecutable</key><string>Singularity</string>
+  <key>CFBundleIdentifier</key><string>com.axiuz.singularity</string>
+  <key>CFBundleName</key><string>Singularity</string>
+  <key>CFBundleDisplayName</key><string>Singularity</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -88,11 +92,21 @@ chmod +x "$RES/app/node_modules/node-pty/prebuilds/"darwin-*/spawn-helper
 codesign --force --deep --sign - "$APP"
 
 echo "→ Empaquetando el DMG"
-STAGE="$DIST/dmg"
+STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -quiet -volname "Dispatch" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+hdiutil create -quiet -volname "Singularity" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 rm -rf "$STAGE"
 
+# El cambio va al final y en dos pasos: la app vieja se aparta y solo se borra
+# cuando la nueva ya está en su sitio, así que un fallo aquí no deja a nadie sin app.
+echo "→ Instalando la app nueva en dist"
+VIEJA="$DIST/Singularity.app.anterior"
+rm -rf "$VIEJA"
+if [ -d "$FINAL" ]; then mv "$FINAL" "$VIEJA"; fi
+mv "$APP" "$FINAL"
+rm -rf "$VIEJA" "$WORK"
+
 echo "✓ $DMG"
+echo "✓ $FINAL"
