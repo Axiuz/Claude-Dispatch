@@ -191,9 +191,9 @@ function touchProject(dir) {
   broadcastProjects();
 }
 
-// ============ Sesiones de terminal (Claude Code dentro del panel) ============
-// Una sesión = un pty con la shell de login del usuario que arranca `claude` en la
-// carpeta del proyecto. Al salir de claude queda la shell abierta.
+// ============ Sesiones de terminal (una shell dentro del panel) ============
+// Una sesión = un pty con la shell de login del usuario abierta en la carpeta del
+// proyecto. Es una terminal normal: quien quiera Claude Code lo escribe él mismo.
 const SCROLLBACK_BYTES = 256 * 1024;
 const sessions = new Map();
 
@@ -222,16 +222,10 @@ function startSession(cwd, cols, rows) {
   const env = { ...process.env, SHELL: shell, TERM: "xterm-256color", COLORTERM: "truecolor" };
   delete env.ORQ_DATA_DIR;
   delete env.ORQ_APP_ONLY;
-  // Las instrucciones del orquestador viajan por variable de entorno: así no hay
-  // que escapar comillas ni saltos de línea dentro del comando de la shell
-  env.DISPATCH_INSTRUCTIONS = buildInstructions(cwd);
 
-  // -l -i: carga el perfil del usuario, que es donde está el PATH hacia `claude`.
-  // --append-system-prompt: sin esto claude solo ve los CLAUDE.md de la carpeta
-  // y no sabe que tiene agentes locales a su disposición.
-  const command =
-    'claude --append-system-prompt "$DISPATCH_INSTRUCTIONS"; unset DISPATCH_INSTRUCTIONS; exec "$SHELL" -l -i';
-  const proc = pty.spawn(shell, ["-l", "-i", "-c", command], {
+  // -l -i: shell de login e interactiva, con el perfil del usuario cargado. Sin
+  // -c: no lanzamos ningún programa, es la terminal de siempre en esa carpeta.
+  const proc = pty.spawn(shell, ["-l", "-i"], {
     name: "xterm-256color",
     cwd,
     env,
@@ -253,8 +247,8 @@ function startSession(cwd, cols, rows) {
     clients: new Set(),
   };
 
-  // Agrupamos la salida en ráfagas de ~16 ms: claude redibuja mucho y un evento
-  // SSE por chunk satura la conexión
+  // Agrupamos la salida en ráfagas de ~16 ms: un programa a pantalla completa
+  // redibuja mucho y un evento SSE por chunk satura la conexión
   proc.onData((data) => {
     s.buffer += data;
     if (s.buffer.length > SCROLLBACK_BYTES) s.buffer = s.buffer.slice(-SCROLLBACK_BYTES);

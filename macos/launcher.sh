@@ -1,7 +1,7 @@
 #!/bin/bash
 # Lanzador de Claude Dispatch.app. Lo invoca la app nativa (ClaudeDispatch.swift):
 #   launcher.sh start   arranca LM Studio y el orquestador; imprime la URL del panel
-#   launcher.sh stop    detiene el orquestador (LM Studio se queda corriendo)
+#   launcher.sh stop    detiene el orquestador y el servidor de LM Studio
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -76,12 +76,24 @@ stop_orquestador() {
   rm -f "$PID_FILE"
 }
 
+# Cerrar la app debe dejar la RAM libre: sin esto el modelo se queda cargado y
+# el servidor escuchando aunque ya no haya nadie que le hable.
+stop_lmstudio() {
+  local lms
+  lms="$(command -v lms)" || return 0
+  "$lms" unload --all >>"$LOG_DIR/lmstudio.log" 2>&1 || true
+  "$lms" server stop >>"$LOG_DIR/lmstudio.log" 2>&1 || true
+}
+
 case "${1:-start}" in
   start)
     start_lmstudio
     start_orquestador
     panel_url
     ;;
-  stop) stop_orquestador ;;
+  stop)
+    stop_orquestador
+    stop_lmstudio
+    ;;
   *) fail "Uso: launcher.sh start|stop" ;;
 esac

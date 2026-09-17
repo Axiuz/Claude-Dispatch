@@ -41,9 +41,26 @@ function showTab(tab) {
   $$(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   $$(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${tab}`));
   $("#app").classList.toggle("wide", WIDE_TABS.includes(tab));
-  // La terminal y el canvas del mapa solo se pueden medir cuando son visibles
-  if (tab === "sesion") requestAnimationFrame(fitTerminal);
+  dockTerminal(tab);
+  // El canvas del mapa y Monaco solo se pueden medir cuando son visibles
   if (tab === "mapa") requestAnimationFrame(() => CodeMap.open());
+  if (tab === "editor") requestAnimationFrame(() => CodeEditor.open());
+}
+
+// La terminal es una sola instancia de xterm: en vez de duplicarla, el nodo
+// #terminalHost se muda entre el dock del carril derecho (visible desde
+// cualquier pestaña) y el panel grande de la pestaña Sesión.
+function dockTerminal(tab) {
+  const host = $("#terminalHost");
+  const full = tab === "sesion";
+  const target = full ? $("#sessionTerminalSlot") : $("#dockBody");
+  if (host.parentElement !== target) {
+    if (full) target.appendChild(host);
+    else target.insertBefore(host, $("#dockEmpty"));
+  }
+  $("#terminalDock").classList.toggle("elsewhere", full);
+  $("#dockAway").hidden = !full;
+  requestAnimationFrame(fitTerminal);
 }
 
 $$(".tab-btn").forEach((btn) => btn.addEventListener("click", () => showTab(btn.dataset.tab)));
@@ -430,7 +447,7 @@ function renderProjects() {
 
     row.innerHTML = `
       <div class="line">
-        <span class="pdot ${live ? "live" : ""}" title="${live ? "Sesión de Claude Code abierta" : ""}"></span>
+        <span class="pdot ${live ? "live" : ""}" title="${live ? "Terminal abierta en esta carpeta" : ""}"></span>
         <span class="pname">${escapeHtml(p.name)}</span>
         ${p.exists ? "" : '<span class="badge-red">Suprimido</span>'}
         ${progress}
@@ -471,7 +488,7 @@ async function openProject(p) {
 async function removeProject(p) {
   const live = sessions.some((s) => s.cwd === p.path && !s.exited);
   const msg = live
-    ? `¿Quitar "${p.name}" de recientes? Su sesión de Claude Code abierta se cerrará.`
+    ? `¿Quitar "${p.name}" de recientes? Su terminal abierta se cerrará.`
     : `¿Quitar "${p.name}" de recientes? La carpeta no se borra.`;
   if (!confirm(msg)) return;
   try {
@@ -510,7 +527,49 @@ window.onFolderPicked = async (folder) => {
 $("#addProjectBtn").addEventListener("click", pickFolder);
 $("#sessionPickBtn").addEventListener("click", pickFolder);
 
-// ================= Sesión: terminal con Claude Code =================
+// ---- Dock de la terminal: plegar, estirar y saltar a tamaño completo ----
+const DOCK_HEIGHT_KEY = "dispatch.dockHeight";
+const DOCK_OPEN_KEY = "dispatch.dockOpen";
+
+function setDockHeight(px) {
+  const h = Math.max(120, Math.min(700, Math.round(px)));
+  $("#dockBody").style.height = `${h}px`;
+  localStorage.setItem(DOCK_HEIGHT_KEY, String(h));
+  requestAnimationFrame(fitTerminal);
+}
+
+function setDockOpen(open) {
+  $("#terminalDock").classList.toggle("collapsed", !open);
+  $("#dockToggleBtn").textContent = open ? "▾" : "▸";
+  $("#dockToggleBtn").title = open ? "Plegar" : "Desplegar";
+  localStorage.setItem(DOCK_OPEN_KEY, open ? "1" : "0");
+  if (open) requestAnimationFrame(fitTerminal);
+}
+
+setDockHeight(Number(localStorage.getItem(DOCK_HEIGHT_KEY)) || 300);
+setDockOpen(localStorage.getItem(DOCK_OPEN_KEY) !== "0");
+
+$("#dockToggleBtn").addEventListener("click", () =>
+  setDockOpen($("#terminalDock").classList.contains("collapsed"))
+);
+$("#dockExpandBtn").addEventListener("click", () => showTab("sesion"));
+$("#dockOpenBtn").addEventListener("click", pickFolder);
+
+// Estirar el alto arrastrando la barra de abajo
+$("#dockGrip").addEventListener("pointerdown", (e) => {
+  const startY = e.clientY;
+  const startH = $("#dockBody").offsetHeight;
+  const move = (ev) => setDockHeight(startH + (ev.clientY - startY));
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  e.preventDefault();
+});
+
+// ================= Sesión: terminal del proyecto =================
 let term = null;
 let fitAddon = null;
 let termStream = null;
@@ -631,10 +690,22 @@ async function flushInput(id) {
   inputBusy = false;
 }
 
+// El dock del carril derecho muestra de qué sesión es la terminal que se ve.
+function renderDock() {
+  const active = sessions.find((s) => s.id === activeSessionId);
+  $("#dockEmpty").hidden = !!active;
+  $("#terminalHost").hidden = !active;
+  const state = $("#dockState");
+  if (!active) state.textContent = "";
+  else state.textContent = active.exited ? `${active.name} · terminada` : active.name;
+  state.classList.toggle("off", !active || active.exited);
+}
+
 function renderSessionUI() {
   const live = sessions.filter((s) => !s.exited).length;
   $("#sessionCount").textContent = live ? String(live) : "";
   $("#infoSessions").textContent = String(live);
+  renderDock();
 
   const active = sessions.find((s) => s.id === activeSessionId);
   $("#sessionEmpty").hidden = !!active;
@@ -666,7 +737,7 @@ function renderSessionUI() {
 $("#closeSessionBtn").addEventListener("click", async () => {
   const active = sessions.find((s) => s.id === activeSessionId);
   if (!active) return;
-  if (!active.exited && !confirm(`¿Cerrar la sesión de Claude Code en "${active.name}"?`)) return;
+  if (!active.exited && !confirm(`¿Cerrar la terminal de "${active.name}"?`)) return;
   try {
     await api(`/api/terminals/${active.id}`, undefined, "DELETE");
   } catch (err) {
@@ -765,7 +836,7 @@ function renderKpis() {
       sub: queued ? `${queued} en cola · máx. ${maxParallel()} a la vez` : `máx. ${maxParallel()} a la vez`,
       always: true,
     },
-    { label: "SESIONES", value: liveSessions, sub: "de Claude Code", always: true },
+    { label: "SESIONES", value: liveSessions, sub: "terminales abiertas", always: true },
   ];
 
   $("#kpiGrid").innerHTML = kpis

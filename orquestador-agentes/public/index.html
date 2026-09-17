@@ -88,11 +88,11 @@
       <div class="live-grid" id="liveGrid"></div>
     </section>
 
-    <!-- ============ SESIÓN (terminal con Claude Code) ============ -->
+    <!-- ============ SESIÓN (terminal del proyecto) ============ -->
     <section id="tab-sesion" class="tab-panel">
       <div class="session-empty" id="sessionEmpty">
         <span class="plan-empty-title">Sin sesión abierta</span>
-        <span class="plan-empty-text">Abre un proyecto del carril izquierdo: se inicia Claude Code dentro de esa carpeta y lo usas aquí mismo.</span>
+        <span class="plan-empty-text">Abre un proyecto del carril izquierdo: se abre una terminal dentro de esa carpeta y la usas aquí mismo.</span>
         <button class="btn primary" id="sessionPickBtn">Seleccione carpeta</button>
       </div>
 
@@ -107,7 +107,7 @@
             <button class="btn danger" id="closeSessionBtn">Cerrar sesión</button>
           </div>
         </div>
-        <div class="terminal-host" id="terminalHost"></div>
+        <div class="terminal-slot" id="sessionTerminalSlot"></div>
       </div>
     </section>
 
@@ -232,6 +232,26 @@
 
   <!-- ============ CARRIL DERECHO: agentes y métricas ============ -->
   <aside class="rail rail-right">
+    <!-- La terminal se ve desde cualquier pestaña. El nodo #terminalHost es uno
+         solo: se mueve de aquí al panel grande de Sesión. -->
+    <div class="dock" id="terminalDock">
+      <div class="rail-head">
+        <span class="eyebrow">TERMINAL</span>
+        <span class="dock-state mono small" id="dockState"></span>
+        <button class="link-btn" id="dockExpandBtn" title="Verla a tamaño completo">⤢</button>
+        <button class="link-btn" id="dockToggleBtn" title="Plegar">▾</button>
+      </div>
+      <div class="dock-body" id="dockBody">
+        <div class="terminal-host" id="terminalHost"></div>
+        <div class="dock-away" id="dockAway" hidden>Se está viendo a tamaño completo en la pestaña Sesión.</div>
+        <div class="dock-empty" id="dockEmpty">
+          <span>Sin sesión.</span>
+          <button class="link-btn" id="dockOpenBtn">Abrir un proyecto</button>
+        </div>
+      </div>
+      <div class="dock-grip" id="dockGrip" title="Arrastra para cambiar el alto"></div>
+    </div>
+
     <div class="rail-head">
       <span class="eyebrow">AGENTES</span>
       <span class="muted small" id="activeCount"></span>

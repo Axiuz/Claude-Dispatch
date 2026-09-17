@@ -76,7 +76,7 @@ button { font-family: inherit; }
 .app {
   height: 100vh;
   display: grid;
-  grid-template-columns: 262px minmax(0, 1fr) 296px;
+  grid-template-columns: 262px minmax(0, 1fr) 344px;
   grid-template-areas: "left center right";
 }
 /* Agentes, Consola y Conexión usan todo el ancho */
@@ -107,7 +107,7 @@ button { font-family: inherit; }
 
 /* Ventanas angostas: carriles más delgados, sin ocultar nada */
 @media (max-width: 1100px) {
-  .app { grid-template-columns: 210px minmax(0, 1fr) 236px; }
+  .app { grid-template-columns: 210px minmax(0, 1fr) 288px; }
   .app.wide { grid-template-columns: 210px minmax(0, 1fr); }
 }
 
@@ -705,3 +705,93 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
   .map-inspector { width: auto; max-height: 260px; }
   .map-stage { min-height: 340px; }
 }
+
+/* ---------- Dock de la terminal en el carril derecho ---------- */
+/* El nodo .terminal-host es uno solo y se muda entre este dock y la pestaña
+   Sesión, así que el alto lo pone el contenedor, no la terminal. */
+.dock { display: flex; flex-direction: column; flex: none; }
+.dock .rail-head { align-items: center; }
+.dock-state { color: var(--green); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-state.off { color: var(--faint); }
+.dock-body { position: relative; height: 300px; display: flex; min-height: 0; }
+.dock-body .terminal-host { flex: 1; padding: 8px 2px 2px 8px; }
+.dock.collapsed .dock-body, .dock.collapsed .dock-grip { display: none; }
+/* Mientras la terminal se ve a tamaño completo en la pestaña Sesión, el dock
+   se queda con el aviso en vez de con un hueco negro */
+.dock.elsewhere .dock-body { height: auto; }
+.dock.elsewhere .dock-grip, .dock.elsewhere .dock-empty { display: none; }
+.dock-away {
+  flex: 1; padding: 12px; text-align: center; font-size: 11.5px; color: var(--faint);
+  background: var(--sunken); border: 1px dashed var(--border-dashed); border-radius: 9px;
+}
+
+.dock-empty {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 6px; text-align: center;
+  font-size: 11.5px; color: var(--faint); background: var(--sunken);
+  border: 1px dashed var(--border-dashed); border-radius: 9px; padding: 12px;
+}
+.dock-grip { height: 7px; cursor: ns-resize; display: flex; align-items: center; justify-content: center; }
+.dock-grip::after { content: ""; width: 34px; height: 3px; border-radius: 2px; background: var(--border-strong); }
+.dock-grip:hover::after { background: var(--accent-line); }
+
+/* Hueco a tamaño completo: la terminal se mete aquí al abrir la pestaña Sesión */
+.terminal-slot { flex: 1; min-height: 0; display: flex; }
+.terminal-slot .terminal-host { flex: 1; }
+
+/* ---------- Editor de código (Monaco) ---------- */
+#tab-editor.tab-panel.active { display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
+.ed-toolbar { display: flex; align-items: center; gap: 10px; flex: none; }
+.ed-toolbar #edPath { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.ed-body {
+  flex: 1; min-height: 0; display: grid; grid-template-columns: 232px minmax(0, 1fr);
+  gap: 10px;
+}
+@media (max-width: 1100px) { .ed-body { grid-template-columns: 180px minmax(0, 1fr); } }
+
+.ed-tree {
+  background: var(--sunken); border: 1px solid var(--border-soft); border-radius: var(--radius);
+  overflow: auto; padding: 6px 0; min-height: 0;
+}
+.ed-tree-empty { padding: 14px 12px; font-size: 11.5px; color: var(--ghost); }
+.ed-row {
+  width: 100%; display: flex; align-items: center; gap: 7px; padding: 4px 10px 4px 8px;
+  background: none; border: none; cursor: pointer; text-align: left;
+  color: var(--text-2); font-size: 12px; font-family: var(--sans);
+}
+.ed-row:hover { background: var(--panel); }
+.ed-row.active { background: var(--accent-soft); color: var(--accent); }
+.ed-row.dir { color: var(--text); }
+.ed-caret { width: 10px; font-size: 9px; color: var(--faint); flex: none; }
+.ed-icon { width: 17px; font-size: 9px; font-family: var(--mono); font-weight: 600; flex: none; }
+.ed-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-dot { margin-left: auto; color: var(--accent); font-size: 8px; }
+
+.ed-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 0; }
+.ed-tabs { display: flex; gap: 4px; overflow-x: auto; flex: none; }
+.ed-tabs:empty { display: none; }
+.ed-tab {
+  display: flex; align-items: center; gap: 8px; padding: 6px 9px 6px 11px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--border-soft); border-bottom: none;
+  border-radius: 8px 8px 0 0; font-size: 12px; color: var(--muted); white-space: nowrap;
+}
+.ed-tab.active { background: var(--sunken); color: var(--text); border-color: var(--border); }
+.ed-tab.dirty .ed-tab-close { color: var(--accent); }
+.ed-tab-close { background: none; border: none; cursor: pointer; color: var(--ghost); font-size: 10px; padding: 0; }
+.ed-tab-close:hover { color: var(--red); }
+
+.ed-host {
+  flex: 1; min-height: 0; background: var(--sunken);
+  border: 1px solid var(--border-soft); border-radius: 0 var(--radius) var(--radius) var(--radius);
+  overflow: hidden;
+}
+.ed-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; text-align: center; padding: 30px;
+  background: var(--sunken); border: 1px dashed var(--border-dashed); border-radius: var(--radius);
+}
+
+/* Aviso de "sin plan" cuando el tablero ya se ve debajo: ocupa menos */
+.plan-empty.slim { padding: 12px 14px; gap: 6px; text-align: left; align-items: flex-start; }
+.plan-empty.slim .plan-empty-text { max-width: none; }
