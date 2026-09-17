@@ -3,6 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
+const child_process = require("child_process");
 const pty = require("node-pty");
 const { buildGraph } = require("./codegraph");
 const { COLUMNS, COLUMN_AFTER_RUN, columnFor, placeStep } = require("./kanban");
@@ -10,6 +11,7 @@ const safepath = require("./safepath");
 const claudeusage = require("./claudeusage");
 const gitinfo = require("./git");
 const commitplan = require("./commitplan");
+const debugsuite = require("./debug");
 
 const DEFAULT_DATA_DIR = path.join(__dirname, "data");
 // La app de macOS pasa ORQ_DATA_DIR para guardar los datos fuera del bundle
@@ -655,8 +657,8 @@ app.use(express.json({ limit: "4mb" }));
 if (process.env.ORQ_APP_ONLY) {
   const isApiPath = (p) => p.startsWith("/api/") || p.startsWith("/agent/") || p === "/delegate";
   app.use((req, res, next) => {
-    if (isApiPath(req.path) || (req.get("user-agent") || "").includes("DispatchApp")) return next();
-    res.status(403).type("text").send("El panel del orquestador solo está disponible en la app Dispatch.");
+    if (isApiPath(req.path) || (req.get("user-agent") || "").includes("SingularityApp")) return next();
+    res.status(403).type("text").send("El panel del orquestador solo está disponible en la app Singularity.");
   });
 }
 app.use(express.static(path.join(__dirname, "public")));
@@ -779,7 +781,7 @@ algo importante, entonces sí lo añades: es una línea, no un archivo comentado
   const sessionNote = project
     ? `
 ## Esta sesión
-Corres dentro de Dispatch, en la carpeta ${project}.
+Corres dentro de Singularity, en la carpeta ${project}.
 Cuando registres un plan usa "project": "${project}".
 `
     : "";
@@ -1661,6 +1663,91 @@ app.delete("/api/terminals/:id", (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- Debugger: diagnóstico, rebuild y reinicio ----
+// Un solo diagnóstico a la vez: dos a la vez se pisarían en el puerto, en los
+// tests y en el build, y el informe dejaría de querer decir nada.
+const REPO_ROOT = debugsuite.repoRootFrom(__dirname);
+let debugRunning = null;
+let lastDebugReport = null;
+
+// El servidor no puede reiniciarse a sí mismo: deja un ayudante desacoplado que
+// espera a que este proceso muera —si no, el puerto sigue tomado— y arranca el
+// siguiente con el mismo entorno. El echo $$ antes del exec deja en el pid file
+// el pid del servidor nuevo, que es el que buscará launcher.sh en el próximo
+// arranque de la app.
+function restartServer() {
+  const logPath = process.env.ORQ_DATA_DIR
+    ? path.join(os.homedir(), "Library", "Logs", "Singularity", "orquestador.log")
+    : path.join(os.tmpdir(), "singularity-orquestador.log");
+  const pidPath = process.env.ORQ_DATA_DIR ? path.join(process.env.ORQ_DATA_DIR, "orquestador.pid") : "";
+  const script =
+    'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done\n' +
+    'LOG="$4"\n' +
+    'mkdir -p "$(dirname "$LOG")" 2>/dev/null\n' +
+    // Sin log escribible el exec fallaría y el panel se quedaría sin servidor
+    ': >>"$LOG" 2>/dev/null || LOG=/dev/null\n' +
+    '[ -n "$5" ] && echo $$ >"$5"\n' +
+    'exec "$2" "$3" >>"$LOG" 2>&1';
+  const child = child_process.spawn(
+    "/bin/sh",
+    ["-c", script, "sh", String(process.pid), process.execPath, path.join(__dirname, "server.js"), logPath, pidPath],
+    { detached: true, stdio: "ignore", cwd: __dirname, env: process.env }
+  );
+  child.unref();
+  setTimeout(() => {
+    sessions.forEach(killSession);
+    usageTracker.stop();
+    process.exit(0);
+  }, 900);
+  return `ayudante ${child.pid} esperando a que muera ${process.pid}\nsalida en ${logPath}`;
+}
+
+const debugContext = () => ({
+  appRoot: __dirname,
+  dataDir: DATA_DIR,
+  repoRoot: REPO_ROOT,
+  port: PORT,
+  config,
+  agents: getAgents(),
+  restart: restartServer,
+});
+
+app.get("/api/debug", (req, res) => {
+  res.json({
+    steps: debugsuite.catalog(),
+    running: debugRunning,
+    repo: REPO_ROOT,
+    last: lastDebugReport,
+  });
+});
+
+app.post("/api/debug/run", (req, res) => {
+  if (debugRunning) return res.status(409).json({ error: "Ya hay un diagnóstico en curso" });
+  const ids = Array.isArray(req.body?.steps) && req.body.steps.length ? req.body.steps : debugsuite.defaultStepIds();
+  const pasos = debugsuite.planSteps(ids);
+  if (!pasos.length) return res.status(400).json({ error: "Ninguna comprobación reconocida" });
+
+  const runId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
+  debugRunning = runId;
+  broadcast("debug:start", { runId, startedAt, steps: pasos.map((s) => ({ id: s.id, label: s.label })) });
+  res.status(202).json({ ok: true, runId, steps: pasos.map((s) => s.id) });
+
+  debugsuite
+    .runSteps(ids, debugContext(), (ev) => broadcast("debug:step", { runId, ...ev }))
+    .then((results) => {
+      lastDebugReport = { runId, startedAt, finishedAt: new Date().toISOString(), results, summary: debugsuite.summarize(results) };
+      broadcast("debug:done", lastDebugReport);
+    })
+    .catch((err) => {
+      lastDebugReport = { runId, startedAt, finishedAt: new Date().toISOString(), results: [], error: String(err.message || err) };
+      broadcast("debug:done", lastDebugReport);
+    })
+    .finally(() => {
+      debugRunning = null;
+    });
+});
+
 // ---- Config ----
 app.get("/api/config", (req, res) => res.json(config));
 app.post("/api/config", (req, res) => {
@@ -1671,7 +1758,7 @@ app.post("/api/config", (req, res) => {
 });
 
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`\n  Dispatch → http://localhost:${PORT}\n`);
+  console.log(`\n  Singularity → http://localhost:${PORT}\n`);
   console.log(`  Manifest para Claude Code: GET http://localhost:${PORT}/api/manifest`);
   console.log(`  Invocar agente:            POST http://localhost:${PORT}/agent/{id}\n`);
 });
