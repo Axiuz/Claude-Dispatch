@@ -1361,6 +1361,8 @@ function renderGit() {
       </div>`;
   };
 
+  const primary = gitPrimaryAction();
+
   const branchBtn = `
     <span class="row gap6 baseline">
       <button class="git-branch mono" data-git-branches title="Cambiar de rama">${escapeHtml(branch)}${arrows}<span class="git-caret">⌄</span></button>
@@ -1374,7 +1376,7 @@ function renderGit() {
     <div class="git-commit-box">
       <textarea class="git-msg" id="gitMsg" rows="1" placeholder="Mensaje (⌘Enter para commitear)"></textarea>
       <div class="git-split">
-        <button class="btn primary git-do" data-git-commit="plain"${gitBusy ? " disabled" : ""}>✓ Commit</button>
+        <button class="btn primary git-do" data-git-primary title="${escapeAttr(primary.title)}"${gitBusy || primary.disabled ? " disabled" : ""}>${escapeHtml(primary.label)}</button>
         <button class="btn primary git-do-more" data-git-commit-menu title="Más opciones"${gitBusy ? " disabled" : ""}>⌄</button>
       </div>
     </div>
@@ -1403,7 +1405,7 @@ function renderGit() {
   msg.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
-      doCommit("plain");
+      runGitPrimary();
     }
   });
 
@@ -1421,7 +1423,7 @@ function renderGit() {
   card.querySelector("[data-git-unstage-all]")?.addEventListener("click", () => gitRun(() => api("/api/git/unstage", { path: gitDir(), all: true })));
   card.querySelector("[data-git-branches]").addEventListener("click", (e) => openBranchMenu(e.currentTarget));
   card.querySelector("[data-git-sync]").addEventListener("click", () => doSync());
-  card.querySelector("[data-git-commit]").addEventListener("click", () => doCommit("plain"));
+  card.querySelector("[data-git-primary]").addEventListener("click", () => runGitPrimary());
   card.querySelector("[data-git-commit-menu]").addEventListener("click", (e) => openCommitMenu(e.currentTarget));
 
   // Plan de commits
@@ -1452,6 +1454,35 @@ function renderGit() {
       renderGit();
     });
   }
+}
+
+// Decide la acción del botón principal según el estado del repositorio:
+// - Si hay archivos modificados, permite commitear.
+// - Si no hay cambios pero hay remoto y commits pendientes, ofrece sincronización.
+// - El orden de los if es crítico: commitear tiene prioridad sobre sincronizar.
+function gitPrimaryAction() {
+  const files = gitInfo?.files || [];
+  const commits = gitInfo?.commits || [];
+  const ahead = gitInfo?.ahead || 0;
+  const behind = gitInfo?.behind || 0;
+  const idle = { mode: "commit", label: "✓ Commit", title: "No hay cambios que commitear", disabled: true };
+
+  if (files.length) return { mode: "commit", label: "✓ Commit", title: "Commitear los cambios", disabled: false };
+  if (!gitInfo?.hasRemote || gitInfo?.detached || !commits.length) return idle;
+  if (!gitInfo?.upstream) return { mode: "sync", label: "☁ Publicar rama", title: "Subir la rama y dejarla siguiendo a su remota", disabled: false };
+  if (ahead || behind) {
+    const arrows = `${behind ? ` ${behind}↓` : ""}${ahead ? ` ${ahead}↑` : ""}`;
+    const parts = [behind ? `traer ${behind}` : "", ahead ? `subir ${ahead}` : ""].filter(Boolean).join(" y ");
+    return { mode: "sync", label: `⟳ Sincronizar${arrows}`, title: `Sincronizar con ${gitInfo.upstream}: ${parts}`, disabled: false };
+  }
+  return idle;
+}
+
+function runGitPrimary() {
+  const primary = gitPrimaryAction();
+  if (primary.disabled || gitBusy) return;
+  if (primary.mode === "sync") return doSync();
+  doCommit("plain");
 }
 
 // La caja crece con el mensaje, hasta un tope: el carril no da para más

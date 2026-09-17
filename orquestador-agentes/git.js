@@ -259,9 +259,11 @@ async function readRepo(dir, { limit = MAX_COMMITS } = {}) {
   if (!root) return { path: dir, root: null, repo: false, error: null };
 
   try {
-    const [statusOut, logOut] = await Promise.all([
+    const [statusOut, logOut, remoteOut] = await Promise.all([
       git(root, ["status", "--porcelain=v1", "-b", "-z"]),
       git(root, ["log", `--max-count=${limit}`, `--format=${LOG_FORMAT}`]),
+      // El uso de execGit en lugar de runGit evita que la lectura se bloquee por operaciones de escritura.
+      execGit(root, ["remote"], GIT_TIMEOUT_MS),
     ]);
     const status = parseStatus(statusOut);
     return {
@@ -269,12 +271,14 @@ async function readRepo(dir, { limit = MAX_COMMITS } = {}) {
       root,
       repo: true,
       error: null,
+      // hasRemote se define solo para evitar que se muestre "Publicar rama" en repositorios sin remoto.
+      hasRemote: remoteOut.ok && remoteOut.stdout.trim().length > 0,
       ...status,
       commits: markUnpushed(parseLog(logOut), status.ahead),
       readAt: new Date().toISOString(),
     };
   } catch (err) {
-    return { path: dir, root, repo: true, error: err.message, files: [], commits: [] };
+    return { path: dir, root, repo: true, error: err.message, hasRemote: false, files: [], commits: [] };
   }
 }
 
