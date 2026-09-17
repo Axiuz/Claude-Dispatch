@@ -1,31 +1,31 @@
 #!/bin/bash
-# Genera dist/Claude-Dispatch-<versión>.dmg con herramientas que ya trae macOS.
+# Genera dist/Dispatch-<versión>.dmg con herramientas que ya trae macOS.
 # Uso: bash Scripts/build-dmg.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/orquestador-agentes"
 DIST="$ROOT/dist"
-APP="$DIST/Claude Dispatch.app"
+APP="$DIST/Dispatch.app"
 VERSION="$(node -p "require('$SRC/package.json').version")"
-DMG="$DIST/Claude-Dispatch-$VERSION.dmg"
+DMG="$DIST/Dispatch-$VERSION.dmg"
 
-echo "→ Compilando Claude Dispatch.app $VERSION"
+echo "→ Compilando Dispatch.app $VERSION"
 rm -rf "$DIST"
 mkdir -p "$DIST"
 RES="$APP/Contents/Resources"
 mkdir -p "$APP/Contents/MacOS" "$RES"
 
 # Binario universal (Apple Silicon + Intel)
-BIN="$APP/Contents/MacOS/ClaudeDispatch"
+BIN="$APP/Contents/MacOS/Dispatch"
 for arch in arm64 x86_64; do
-  swiftc -O -target "$arch-apple-macos13" -o "$DIST/ClaudeDispatch-$arch" "$ROOT/macos/ClaudeDispatch.swift"
+  swiftc -O -target "$arch-apple-macos13" -o "$DIST/Dispatch-$arch" "$ROOT/macos/Dispatch.swift"
 done
-lipo -create -output "$BIN" "$DIST/ClaudeDispatch-arm64" "$DIST/ClaudeDispatch-x86_64"
-rm "$DIST/ClaudeDispatch-arm64" "$DIST/ClaudeDispatch-x86_64"
+lipo -create -output "$BIN" "$DIST/Dispatch-arm64" "$DIST/Dispatch-x86_64"
+rm "$DIST/Dispatch-arm64" "$DIST/Dispatch-x86_64"
 
 echo "→ Generando el icono"
-ICONSET="$DIST/ClaudeDispatch.iconset"
+ICONSET="$DIST/Dispatch.iconset"
 mkdir -p "$ICONSET"
 swift "$ROOT/macos/make-icon.swift" "$ROOT/macos/logo.jpg" "$DIST/icon-1024.png"
 for size in 16 32 128 256 512; do
@@ -40,10 +40,10 @@ cat >"$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleExecutable</key><string>ClaudeDispatch</string>
-  <key>CFBundleIdentifier</key><string>com.axiuz.claude-dispatch</string>
-  <key>CFBundleName</key><string>Claude Dispatch</string>
-  <key>CFBundleDisplayName</key><string>Claude Dispatch</string>
+  <key>CFBundleExecutable</key><string>Dispatch</string>
+  <key>CFBundleIdentifier</key><string>com.axiuz.dispatch</string>
+  <key>CFBundleName</key><string>Dispatch</string>
+  <key>CFBundleDisplayName</key><string>Dispatch</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -92,7 +92,7 @@ STAGE="$DIST/dmg"
 mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -quiet -volname "Claude Dispatch" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+hdiutil create -quiet -volname "Dispatch" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 rm -rf "$STAGE"
 
 echo "✓ $DMG"

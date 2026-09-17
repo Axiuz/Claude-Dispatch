@@ -4,7 +4,7 @@ import Cocoa
 import WebKit
 
 // El servidor solo sirve el panel a clientes con este user agent
-let appUserAgent = "ClaudeDispatchApp"
+let appUserAgent = "DispatchApp"
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMessageHandler {
   var window: NSWindow!
@@ -78,26 +78,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScript
       contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
       backing: .buffered, defer: false)
-    window.title = "Claude Dispatch"
+    window.title = "Dispatch"
     // Tres columnas (proyectos, centro, agentes) no caben en menos
     window.minSize = NSSize(width: 1000, height: 620)
     window.contentView = webView
     window.center()
-    window.setFrameAutosaveName("ClaudeDispatchMain")
+    window.setFrameAutosaveName("DispatchMain")
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
   }
 
   func showStatus(_ text: String) {
     webView.loadHTMLString("""
-      <body style="margin:0;height:100vh;display:grid;place-items:center;background:#0d0f14;
-      color:#9aa3b2;font:14px -apple-system,system-ui">\(text)</body>
+      <body style="margin:0;height:100vh;display:grid;place-items:center;background:#0a0a0a;
+      color:#a2a29a;font:14px -apple-system,system-ui">\(text)</body>
       """, baseURL: nil)
   }
 
   func fatal(_ message: String) {
     let alert = NSAlert()
-    alert.messageText = "No se pudo arrancar Claude Dispatch"
+    alert.messageText = "No se pudo arrancar Dispatch"
     alert.informativeText = message
     alert.alertStyle = .critical
     alert.runModal()
@@ -109,9 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScript
 
     let appItem = NSMenuItem()
     let appMenu = NSMenu()
-    appMenu.addItem(withTitle: "Ocultar Claude Dispatch", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+    appMenu.addItem(withTitle: "Ocultar Dispatch", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
     appMenu.addItem(.separator())
-    appMenu.addItem(withTitle: "Salir de Claude Dispatch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    appMenu.addItem(withTitle: "Salir de Dispatch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     appItem.submenu = appMenu
     main.addItem(appItem)
 

@@ -1,13 +1,15 @@
 #!/bin/bash
-# Lanzador de Claude Dispatch.app. Lo invoca la app nativa (ClaudeDispatch.swift):
+# Lanzador de Dispatch.app. Lo invoca la app nativa (Dispatch.swift):
 #   launcher.sh start   arranca LM Studio y el orquestador; imprime la URL del panel
 #   launcher.sh stop    detiene el orquestador y el servidor de LM Studio
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$HERE/app"
-DATA_DIR="$HOME/Library/Application Support/Claude Dispatch"
-LOG_DIR="$HOME/Library/Logs/Claude Dispatch"
+DATA_DIR="$HOME/Library/Application Support/Dispatch"
+LOG_DIR="$HOME/Library/Logs/Dispatch"
+OLD_DATA_DIR="$HOME/Library/Application Support/Claude Dispatch"
+OLD_LOG_DIR="$HOME/Library/Logs/Claude Dispatch"
 PID_FILE="$DATA_DIR/orquestador.pid"
 
 # Las apps abiertas desde Finder no heredan el PATH de la terminal
@@ -15,6 +17,8 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.lmstudio/bin:$PATH"
 NVM_NODE="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1)"
 [ -n "$NVM_NODE" ] && export PATH="$PATH:$NVM_NODE"
 
+[ -d "$OLD_DATA_DIR" ] && [ ! -d "$DATA_DIR" ] && mv "$OLD_DATA_DIR" "$DATA_DIR"
+[ -d "$OLD_LOG_DIR" ] && [ ! -d "$LOG_DIR" ] && mv "$OLD_LOG_DIR" "$LOG_DIR"
 mkdir -p "$DATA_DIR" "$LOG_DIR"
 
 fail() {

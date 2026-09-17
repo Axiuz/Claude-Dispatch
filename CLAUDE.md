@@ -200,7 +200,7 @@ material es grande, pártelo en trozos de ~300 líneas o pásale tu resumen.
 Nunca delegues decisiones de arquitectura ni la implementación de seguridad,
 auth o credenciales (sí puedes pedir revisión).
 
-La pestaña **Sesión** del panel de Claude Dispatch arranca Claude Code con estas
+La pestaña **Sesión** del panel de Dispatch arranca Claude Code con estas
 instrucciones ya puestas (`--append-system-prompt`): ahí dentro no hace falta
 copiar nada. El dock del carril derecho es otra terminal distinta, una shell
 pelada para comandos sueltos; si abres Claude Code ahí, necesita estas

@@ -1,6 +1,6 @@
 # Orquestador de Agentes
 
-Servidor y panel de Claude Dispatch. La documentación completa (instalación, uso,
+Servidor y panel de Dispatch. La documentación completa (instalación, uso,
 arquitectura y API) está en el [README de la raíz](../README.md).
 
 ```bash
