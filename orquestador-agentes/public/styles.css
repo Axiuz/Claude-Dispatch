@@ -1,42 +1,55 @@
 :root {
+  /* Paleta de la marca: oro #d4af37, teal #0f7c7c, teal profundo #083c3c,
+     crema #e9e2cf y pizarra #1a1f24. Las superficies salen de la pizarra, el
+     oro es el acento, el teal lo vivo (activo, correcto) y el crema el texto.
+     Todo lee de aquí —panel, Monaco, xterm y el mapa—: no hay colores sueltos
+     fuera de este bloque, así que repintar la app se hace aquí y nada más. */
+
   /* Superficies, de más oscura a más clara */
-  --bg: #0b0c0e;
-  --rail: #0e1014;
-  --sunken: #101216;
-  --panel: #14161b;
-  --panel-active: #171a21;
-  --panel-2: #1b1e25;
-  --panel-3: #22262f;
+  --bg: #0f1317;
+  --rail: #14181d;
+  --sunken: #12161a;
+  --panel: #1a1f24;
+  --panel-active: #1e242a;
+  --panel-2: #232a31;
+  --panel-3: #2c343c;
 
-  --border-soft: #1e222b;
-  --border: #262a33;
-  --border-strong: #2e3340;
-  --border-dashed: #333846;
-  --ghost: #3a3f4b;
+  --border-soft: #202730;
+  --border: #29323a;
+  --border-strong: #35404a;
+  --border-dashed: #3c4852;
+  --ghost: #4a5560;
 
-  --text: #e9eaee;
-  --text-2: #c9cdd8;
-  --code: #b9c0d4;
-  --muted: #8a8f9c;
-  --faint: #858b99;
+  --text: #e9e2cf;
+  --text-2: #cdc8b8;
+  --code: #cfd3c8;
+  --muted: #929389;
+  --faint: #7f867f;
 
-  /* Cobre del logo */
-  --accent: #e08a5f;
-  --accent-hover: #ffb07c;
-  --accent-soft: rgba(224, 138, 95, 0.14);
-  --accent-line: rgba(224, 138, 95, 0.45);
-  --accent-glow: rgba(224, 138, 95, 0.7);
-  --on-accent: #0b0c0e;
+  /* Oro del logo */
+  --accent: #d4af37;
+  --accent-hover: #ecc85a;
+  --accent-soft: rgba(212, 175, 55, 0.14);
+  --accent-line: rgba(212, 175, 55, 0.45);
+  --accent-glow: rgba(212, 175, 55, 0.7);
+  --on-accent: #12161a;
 
-  --green: #4ade80;
-  --green-soft: rgba(74, 222, 128, 0.12);
-  --green-track: rgba(74, 222, 128, 0.25);
-  --amber: #fbbf24;
-  --amber-soft: rgba(251, 191, 36, 0.12);
-  --red: #f87171;
-  --red-soft: rgba(248, 113, 113, 0.1);
-  --red-line: rgba(248, 113, 113, 0.3);
-  --violet: #a78bfa;
+  /* Teal, el segundo color de la marca. El teal puro es oscuro: sirve para
+     fondos y bordes, y --green es su versión legible sobre fondo oscuro. */
+  --teal: #0f7c7c;
+  --teal-deep: #083c3c;
+  --teal-soft: rgba(15, 124, 124, 0.18);
+  --teal-line: rgba(15, 124, 124, 0.45);
+
+  --green: #2fb3a4;
+  --green-soft: rgba(15, 124, 124, 0.16);
+  --green-track: rgba(15, 124, 124, 0.38);
+  --amber: #dba13c;
+  --amber-soft: rgba(219, 161, 60, 0.12);
+  --red: #e0705c;
+  --red-soft: rgba(224, 112, 92, 0.1);
+  --red-line: rgba(224, 112, 92, 0.32);
+  --violet: #8fb9c9;
 
   --shadow: rgba(0, 0, 0, 0.6);
   --backdrop: rgba(0, 0, 0, 0.6);
@@ -66,6 +79,7 @@ button { font-family: inherit; }
 .row { display: flex; align-items: center; gap: 12px; }
 .row.baseline { align-items: baseline; }
 .row.between { justify-content: space-between; }
+.row.gap6 { gap: 6px; }
 .push { margin-left: auto; }
 
 @keyframes sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
@@ -73,14 +87,23 @@ button { font-family: inherit; }
 @keyframes glow { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 
 /* ---------- Layout de tres columnas ---------- */
+/* Los anchos son variables porque los carriles se arrastran: makeWidthDrag() en
+   app.js escribe --rail-left y --rail-right en el <html> y los guarda en
+   localStorage. Al ir inline ganan a la media query de abajo. */
+:root {
+  --rail-left: 288px;
+  --rail-right: 344px;
+}
+
 .app {
+  position: relative;
   height: 100vh;
   display: grid;
-  grid-template-columns: 262px minmax(0, 1fr) 344px;
+  grid-template-columns: var(--rail-left) minmax(0, 1fr) var(--rail-right);
   grid-template-areas: "left center right";
 }
 /* Agentes, Consola y Conexión usan todo el ancho */
-.app.wide { grid-template-columns: 262px minmax(0, 1fr); grid-template-areas: "left center"; }
+.app.wide { grid-template-columns: var(--rail-left) minmax(0, 1fr); grid-template-areas: "left center"; }
 .app.wide .rail-right { display: none; }
 
 .rail {
@@ -92,8 +115,23 @@ button { font-family: inherit; }
   overflow-y: auto;
   min-height: 0;
 }
-.rail-left { grid-area: left; border-right: 1px solid var(--border-soft); }
+.rail-left { grid-area: left; border-right: 1px solid var(--border-soft); overflow: hidden; }
 .rail-right { grid-area: right; border-left: 1px solid var(--border-soft); gap: 11px; }
+
+/* El pie del carril izquierdo —agentes y gasto— se queda abajo: el que cede
+   espacio y hace scroll es la lista de proyectos, no el carril entero, que si
+   no empujaría los agentes fuera de la vista al abrir muchas carpetas. */
+.rail-bottom {
+  margin-top: auto;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 58%;
+  overflow-y: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
 
 .center {
   grid-area: center;
@@ -105,11 +143,42 @@ button { font-family: inherit; }
   min-height: 0;
 }
 
-/* Ventanas angostas: carriles más delgados, sin ocultar nada */
+/* Ventanas angostas: carriles más delgados, sin ocultar nada. Va a las
+   variables, no al grid, para que un ancho arrastrado siga mandando */
 @media (max-width: 1100px) {
-  .app { grid-template-columns: 210px minmax(0, 1fr) 288px; }
-  .app.wide { grid-template-columns: 210px minmax(0, 1fr); }
+  :root { --rail-left: 232px; --rail-right: 288px; }
 }
+
+/* ---------- Tiradores de ancho ---------- */
+/* Franja invisible sobre el borde del carril; se pinta al pasar el ratón.
+   Cuelgan de .app y no del carril, que tiene scroll propio. */
+.rail-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 20;
+}
+#railLeftResizer { left: calc(var(--rail-left) - 3px); }
+#railRightResizer { right: calc(var(--rail-right) - 3px); }
+.app.wide #railRightResizer { display: none; }
+.rail-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.rail-resizer:hover::after, body.resizing-x .rail-resizer::after { background: var(--accent-line); }
+
+/* Mientras se arrastra, el cursor no cambia al pasar sobre el texto y nada se
+   selecciona sin querer */
+body.resizing-x { cursor: col-resize; user-select: none; }
+body.resizing-x * { cursor: col-resize !important; }
 
 /* ---------- Marca y estado ---------- */
 .brand { display: flex; align-items: center; gap: 9px; }
@@ -139,9 +208,10 @@ button { font-family: inherit; }
   font-size: 11.5px; color: var(--faint);
 }
 .link-btn:hover { color: var(--accent); }
+.link-btn.tiny { font-size: 10px; }
 
 /* ---------- Proyectos ---------- */
-.project-list { display: flex; flex-direction: column; gap: 5px; }
+.project-list { display: flex; flex-direction: column; gap: 5px; flex: 0 1 auto; overflow-y: auto; min-height: 64px; }
 
 .project-pick {
   border: 1px dashed var(--border-dashed); border-radius: 9px; background: none;
@@ -396,14 +466,7 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .agent-card .task { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.45; overflow-wrap: anywhere; }
 .agent-card .stats { font-size: 10.5px; color: var(--faint); margin-top: 5px; font-family: var(--mono); }
 
-.kpi-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; min-width: 0; }
-.kpi .klabel { font-size: 9.5px; letter-spacing: 0.6px; color: var(--muted); font-weight: 600; }
-.kpi .kvalue { font-size: 18px; font-weight: 600; font-family: var(--mono); margin-top: 2px; }
-.kpi .kvalue.empty { color: var(--faint); }
-.kpi .ksub { font-size: 10.5px; color: var(--faint); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-/* Desglose del gasto de Claude Code: acompaña al KPI TOKENS CLAUDE */
+/* Desglose del gasto de Claude Code */
 .usage-card {
   background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
   padding: 10px; display: flex; flex-direction: column; gap: 7px;
@@ -418,12 +481,175 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 }
 .usage-empty { font-size: 11.5px; color: var(--faint); }
 
-.spark-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 7px; }
-.spark-card .field-label { margin: 0; font-size: 9.5px; }
-.spark { display: flex; align-items: flex-end; gap: 2px; height: 44px; }
-.spark .bar { flex: 1; border-radius: 2px 2px 0 0; background: var(--border-strong); min-height: 3px; }
-.spark .bar.zero { background: var(--border-soft); }
-.spark .bar.now { background: var(--accent); }
+/* ---------- Control de código (Git) ---------- */
+.git-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px; display: flex; flex-direction: column; gap: 9px; min-width: 0;
+}
+.git-card .field-label { margin: 0; font-size: 9.5px; }
+.git-branch {
+  font-size: 11px; color: var(--accent); display: flex; align-items: center; gap: 5px; min-width: 0;
+  background: none; border: 0; border-radius: 5px; padding: 2px 4px; cursor: pointer; font-family: var(--mono);
+}
+.git-branch:hover { background: var(--panel-2); }
+.git-caret { color: var(--muted); font-size: 10px; }
+.git-sync {
+  flex: none; background: none; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 3px 4px; border-radius: 5px;
+}
+.git-sync:hover { background: var(--panel-2); color: var(--accent); }
+/* Mientras corre una operación la tarjeta no acepta más clics */
+.git-card.busy { opacity: 0.6; pointer-events: none; }
+
+.git-commit-box { display: flex; flex-direction: column; gap: 6px; }
+.git-msg {
+  width: 100%; resize: none; overflow-y: auto; min-height: 30px; max-height: 132px;
+  background: var(--sunken); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 8px; font-family: inherit; font-size: 11.5px; line-height: 1.4;
+}
+.git-msg:focus { outline: none; border-color: var(--accent-line); }
+.git-msg::placeholder { color: var(--faint); }
+.git-split { display: flex; gap: 1px; }
+.git-do { flex: 1; border-radius: 6px 0 0 6px; font-size: 12px; padding: 5px 10px; }
+.git-do-more { flex: none; border-radius: 0 6px 6px 0; font-size: 11px; padding: 5px 8px; }
+.git-ahead { color: var(--green); }
+.git-behind { color: var(--amber); }
+.git-empty, .git-clean { font-size: 11.5px; color: var(--faint); }
+
+.git-section { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.git-section-head {
+  display: flex; justify-content: space-between; gap: 8px; align-items: baseline;
+  font-size: 10.5px; color: var(--muted); font-weight: 600;
+  border-top: 1px solid var(--border-soft); padding-top: 7px;
+}
+
+/* Plan de commits: lo que el documenter agrupó, listo para ejecutarse. Va
+   pegado a la caja de mensaje porque es de donde sale el texto que se commitea. */
+.git-plan .git-section-head { border-top: 0; padding-top: 0; }
+.git-plan-list { display: flex; flex-direction: column; gap: 4px; max-height: 190px; overflow-y: auto; }
+.git-plan-item {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  background: var(--teal-soft); border: 1px solid transparent;
+  border-radius: 6px; padding: 5px 6px;
+}
+.git-plan-item:hover { border-color: var(--teal-line); }
+.git-plan-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.git-plan-title {
+  font-size: 11.5px; color: var(--text-2); line-height: 1.35;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.git-plan-files { display: flex; flex-wrap: wrap; gap: 3px; }
+.git-plan-file {
+  font-family: var(--mono); font-size: 9.5px; color: var(--faint);
+  background: var(--sunken); border-radius: 4px; padding: 1px 4px;
+  max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.git-plan-none { font-size: 9.5px; color: var(--faint); font-style: italic; }
+.git-plan-acts { display: flex; gap: 2px; flex: none; }
+.git-plan-act {
+  background: none; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 11px; line-height: 1; padding: 4px 5px; border-radius: 5px;
+}
+.git-plan-act:hover { background: var(--panel-2); color: var(--text); }
+.git-plan-act.go:hover { color: var(--green); }
+.git-plan-act.drop:hover { color: var(--red); }
+.git-plan-act[disabled] { opacity: 0.4; cursor: default; }
+.git-paste {
+  width: 100%; resize: vertical; min-height: 96px;
+  background: var(--sunken); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 8px; font-size: 10.5px; line-height: 1.45;
+}
+.git-paste:focus { outline: none; border-color: var(--accent-line); }
+.git-paste::placeholder { color: var(--faint); }
+
+.git-files { display: flex; flex-direction: column; max-height: 168px; overflow-y: auto; }
+.git-file {
+  display: flex; align-items: baseline; gap: 4px; width: 100%; min-width: 0;
+  border-radius: 5px; padding: 0 4px;
+}
+.git-file:hover { background: var(--panel-2); }
+.git-file-open {
+  display: flex; align-items: baseline; gap: 6px; flex: 1; min-width: 0;
+  background: none; border: 0; padding: 3px 1px; cursor: pointer;
+  text-align: left; color: var(--text-2); font-family: inherit; font-size: 11.5px;
+}
+/* El botón de preparar aparece al pasar por encima, como en VS Code */
+.git-file-act {
+  flex: none; width: 16px; background: none; border: 0; border-radius: 4px; cursor: pointer;
+  color: var(--muted); font-size: 13px; line-height: 1; opacity: 0;
+}
+.git-file:hover .git-file-act { opacity: 1; }
+.git-file-act:hover { background: var(--panel-3); color: var(--accent); }
+/* Preparado, pero con más cambios encima sin preparar */
+.git-file.partial .git-name::after { content: "•"; color: var(--amber); margin-left: 4px; }
+.git-name { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-dir {
+  flex: 1; min-width: 0; font-size: 10px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.git-letter { flex: none; font-family: var(--mono); font-size: 11px; color: var(--amber); width: 12px; text-align: center; }
+.git-file.added .git-letter, .git-file.untracked .git-letter { color: var(--green); }
+.git-file.deleted .git-letter { color: var(--red); }
+.git-file.conflict .git-letter { color: var(--red); }
+.git-file.renamed .git-letter, .git-file.copied .git-letter { color: var(--violet); }
+
+.git-commits { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
+.git-commit { display: flex; gap: 8px; padding: 4px 2px; min-width: 0; position: relative; }
+/* El riel del grafo: la línea une los puntos como en la vista de commits */
+.git-commit::before {
+  content: ""; position: absolute; left: 4px; top: 0; bottom: 0; width: 1px; background: var(--border-strong);
+}
+.git-commit:first-child::before { top: 10px; }
+.git-commit:last-child::before { bottom: calc(100% - 10px); }
+.git-dot {
+  flex: none; width: 7px; height: 7px; margin-top: 4px; border-radius: 50%;
+  background: var(--bg); border: 1.5px solid var(--ghost); position: relative; z-index: 1;
+}
+.git-commit.unpushed .git-dot { border-color: var(--accent); background: var(--accent-soft); }
+.git-commit-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.git-subject {
+  font-size: 11.5px; color: var(--text-2); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.git-branch-chip {
+  font-size: 9.5px; font-family: var(--mono); color: var(--accent);
+  background: var(--accent-soft); border: 1px solid var(--accent-line);
+  border-radius: 4px; padding: 0 4px; margin-right: 5px;
+}
+.git-meta { display: flex; gap: 7px; font-size: 10px; color: var(--faint); flex-wrap: wrap; }
+.git-tag { color: var(--accent); }
+.git-more { font-size: 10.5px; color: var(--faint); padding: 2px 5px; }
+
+/* ---------- Menú flotante (ramas y opciones de commit) ---------- */
+/* Va en <body> y en position fixed: la tarjeta vive en un carril con scroll */
+.float-menu {
+  position: fixed; z-index: 60; min-width: 190px; max-width: 290px;
+  background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: 8px;
+  padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.float-menu-filter {
+  background: var(--sunken); border: 1px solid var(--border); border-radius: 5px; margin: 2px;
+  color: var(--text); font-family: inherit; font-size: 11.5px; padding: 4px 6px;
+}
+.float-menu-filter:focus { outline: none; border-color: var(--accent-line); }
+.float-menu-list { display: flex; flex-direction: column; max-height: 300px; overflow-y: auto; }
+.float-menu-item {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  background: none; border: 0; border-radius: 5px; padding: 5px 8px; cursor: pointer;
+  color: var(--text-2); font-family: inherit; font-size: 12px; text-align: left;
+}
+.float-menu-item:hover { background: var(--panel-3); color: var(--text); }
+.float-menu-item.checked { color: var(--accent); }
+.float-menu-item.checked .float-menu-label::before { content: "✓ "; }
+.float-menu-item.hidden { display: none; }
+.float-menu-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.float-menu-hint { flex: none; font-size: 10px; color: var(--faint); font-family: var(--mono); }
+.float-menu-sep {
+  border-top: 1px solid var(--border-soft); margin: 4px 2px 2px; padding-top: 4px;
+  font-size: 9.5px; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase;
+}
+.float-menu-sep:empty { margin: 3px 2px; padding-top: 0; }
 
 /* ---------- Sesión (terminal) ---------- */
 .session-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -585,19 +811,19 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 /* ---------- Mapa de código ---------- */
 /* Paleta categórica: un color por carpeta de primer nivel */
 :root {
-  --graph-1: #e08a5f;
-  --graph-2: #7dd3fc;
-  --graph-3: #a78bfa;
-  --graph-4: #4ade80;
-  --graph-5: #fbbf24;
-  --graph-6: #f472b6;
-  --graph-7: #38bdf8;
-  --graph-8: #fb923c;
-  --graph-9: #2dd4bf;
-  --graph-10: #c084fc;
-  --graph-edge: rgba(201, 205, 216, 0.16);
-  --graph-edge-hot: rgba(224, 138, 95, 0.75);
-  --graph-dim: rgba(138, 143, 156, 0.22);
+  --graph-1: #d4af37;
+  --graph-2: #2fb3a4;
+  --graph-3: #8fb9c9;
+  --graph-4: #9bbf6e;
+  --graph-5: #d98b52;
+  --graph-6: #cf7f8e;
+  --graph-7: #63a9c4;
+  --graph-8: #b08ec4;
+  --graph-9: #4fbf9c;
+  --graph-10: #cbbf8a;
+  --graph-edge: rgba(205, 200, 184, 0.16);
+  --graph-edge-hot: rgba(212, 175, 55, 0.75);
+  --graph-dim: rgba(146, 147, 137, 0.22);
 }
 
 #tab-mapa { gap: 12px; overflow: hidden; }
@@ -672,23 +898,20 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 }
 
 /* ---------- Dock de la terminal en el carril derecho ---------- */
-/* El nodo .terminal-host es uno solo y se muda entre este dock y la pestaña
-   Sesión, así que el alto lo pone el contenedor, no la terminal. */
+/* Shell propia del dock, independiente de la pestaña Sesión. El alto lo pone el
+   contenedor (arrastrable), no la terminal. */
 .dock { display: flex; flex-direction: column; flex: none; }
 .dock .rail-head { align-items: center; }
-.dock-state { color: var(--green); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Cabecera sin botones: es ella misma el interruptor de plegado */
+.dock-head { cursor: pointer; user-select: none; border-radius: 6px; padding: 2px 4px; margin-left: -4px; }
+.dock-head:hover { background: var(--panel); }
+.dock-head:focus-visible { outline: 1px solid var(--accent-line); outline-offset: 1px; }
+.dock-state { color: var(--green); max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dock-state.off { color: var(--faint); }
 .dock-body { position: relative; height: 300px; display: flex; min-height: 0; }
 .dock-body .terminal-host { flex: 1; padding: 8px 2px 2px 8px; }
+.dock-body .terminal-host[hidden] { display: none; }
 .dock.collapsed .dock-body, .dock.collapsed .dock-grip { display: none; }
-/* Mientras la terminal se ve a tamaño completo en la pestaña Sesión, el dock
-   se queda con el aviso en vez de con un hueco negro */
-.dock.elsewhere .dock-body { height: auto; }
-.dock.elsewhere .dock-grip, .dock.elsewhere .dock-empty { display: none; }
-.dock-away {
-  flex: 1; padding: 12px; text-align: center; font-size: 11.5px; color: var(--faint);
-  background: var(--sunken); border: 1px dashed var(--border-dashed); border-radius: 9px;
-}
 
 .dock-empty {
   position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -709,11 +932,21 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .ed-toolbar { display: flex; align-items: center; gap: 10px; flex: none; }
 .ed-toolbar #edPath { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* El árbol también se arrastra: la columna del medio es el tirador */
+:root { --ed-tree: 232px; }
 .ed-body {
-  flex: 1; min-height: 0; display: grid; grid-template-columns: 232px minmax(0, 1fr);
-  gap: 10px;
+  flex: 1; min-height: 0; display: grid;
+  grid-template-columns: var(--ed-tree) 7px minmax(0, 1fr);
+  gap: 6px;
 }
-@media (max-width: 1100px) { .ed-body { grid-template-columns: 180px minmax(0, 1fr); } }
+@media (max-width: 1100px) { :root { --ed-tree: 180px; } }
+
+.ed-resizer { cursor: col-resize; position: relative; }
+.ed-resizer::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px;
+  background: transparent; transition: background 120ms ease;
+}
+.ed-resizer:hover::after, body.resizing-x .ed-resizer::after { background: var(--accent-line); }
 
 .ed-tree {
   background: var(--sunken); border: 1px solid var(--border-soft); border-radius: var(--radius);

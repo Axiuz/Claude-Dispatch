@@ -13,7 +13,13 @@
 <body>
 <div class="app" id="app">
 
-  <!-- ============ CARRIL IZQUIERDO: marca, estado y proyectos ============ -->
+  <!-- Tiradores de ancho de los carriles. Cuelgan de .app, no de los carriles:
+       los carriles tienen scroll y el tirador se iria con el desplazamiento.
+       Doble clic devuelve el ancho por defecto. -->
+  <div class="rail-resizer" id="railLeftResizer" title="Arrastra para cambiar el ancho"></div>
+  <div class="rail-resizer" id="railRightResizer" title="Arrastra para cambiar el ancho"></div>
+
+  <!-- ============ CARRIL IZQUIERDO: marca, proyectos, agentes y gasto ============ -->
   <aside class="rail rail-left">
     <div class="brand">
       <span class="logo">✳</span>
@@ -29,6 +35,20 @@
       <button class="link-btn" id="addProjectBtn">+ carpeta</button>
     </div>
     <div class="project-list" id="projectList"></div>
+
+    <!-- Al pie del carril: quien trabaja (los agentes) y lo que cuesta (los
+         tokens de Claude Code). Se queda abajo aunque la lista de proyectos
+         crezca; la que hace scroll es ella, no el carril entero. -->
+    <div class="rail-bottom">
+      <div class="rail-head">
+        <span class="eyebrow">AGENTES</span>
+        <span class="muted small" id="activeCount"></span>
+      </div>
+      <div class="agent-list" id="agentGrid"></div>
+
+      <!-- Gasto real de Claude Code, leído de sus propios transcripts -->
+      <div class="usage-card" id="usageCard"></div>
+    </div>
   </aside>
 
   <!-- ============ CENTRO: pestañas ============ -->
@@ -83,8 +103,9 @@
         <button class="btn primary" id="edSaveBtn">Guardar ⌘S</button>
       </div>
 
-      <div class="ed-body">
+      <div class="ed-body" id="edBody">
         <aside class="ed-tree" id="edTree"></aside>
+        <div class="ed-resizer" id="edResizer" title="Arrastra para cambiar el ancho"></div>
         <div class="ed-main">
           <div class="ed-tabs" id="edTabs"></div>
           <div class="ed-host" id="edHost"></div>
@@ -100,7 +121,7 @@
     <section id="tab-sesion" class="tab-panel">
       <div class="session-empty" id="sessionEmpty">
         <span class="plan-empty-title">Sin sesión abierta</span>
-        <span class="plan-empty-text">Abre un proyecto del carril izquierdo: se abre una terminal dentro de esa carpeta y la usas aquí mismo.</span>
+        <span class="plan-empty-text">Abre un proyecto del carril izquierdo: se arranca Claude Code dentro de esa carpeta y lo usas aquí mismo. Para comandos sueltos está la terminal del dock, a la derecha.</span>
         <button class="btn primary" id="sessionPickBtn">Seleccione carpeta</button>
       </div>
 
@@ -115,7 +136,9 @@
             <button class="btn danger" id="closeSessionBtn">Cerrar sesión</button>
           </div>
         </div>
-        <div class="terminal-slot" id="sessionTerminalSlot"></div>
+        <div class="terminal-slot" id="sessionTerminalSlot">
+          <div class="terminal-host" id="sessionTerminalHost"></div>
+        </div>
       </div>
     </section>
 
@@ -238,47 +261,29 @@
     </section>
   </main>
 
-  <!-- ============ CARRIL DERECHO: agentes y métricas ============ -->
+  <!-- ============ CARRIL DERECHO: terminal y control de código ============ -->
   <aside class="rail rail-right">
-    <!-- La terminal se ve desde cualquier pestaña. El nodo #terminalHost es uno
-         solo: se mueve de aquí al panel grande de Sesión. -->
+    <!-- Shell pelada para comandos sueltos, independiente de la sesión de Claude
+         Code de la pestaña Sesión. La cabecera entera pliega el dock. -->
     <div class="dock" id="terminalDock">
-      <div class="rail-head">
+      <div class="rail-head dock-head" id="dockHead" role="button" tabindex="0"
+           aria-expanded="true" title="Plegar o desplegar">
         <span class="eyebrow">TERMINAL</span>
         <span class="dock-state mono small" id="dockState"></span>
-        <button class="link-btn" id="dockExpandBtn" title="Verla a tamaño completo">⤢</button>
-        <button class="link-btn" id="dockToggleBtn" title="Plegar">▾</button>
       </div>
       <div class="dock-body" id="dockBody">
-        <div class="terminal-host" id="terminalHost"></div>
-        <div class="dock-away" id="dockAway" hidden>Se está viendo a tamaño completo en la pestaña Sesión.</div>
+        <div class="terminal-host" id="dockTerminalHost"></div>
         <div class="dock-empty" id="dockEmpty">
-          <span>Sin sesión.</span>
+          <span id="dockEmptyText">Sin carpeta abierta.</span>
           <button class="link-btn" id="dockOpenBtn">Abrir un proyecto</button>
         </div>
       </div>
       <div class="dock-grip" id="dockGrip" title="Arrastra para cambiar el alto"></div>
     </div>
 
-    <div class="rail-head">
-      <span class="eyebrow">AGENTES</span>
-      <span class="muted small" id="activeCount"></span>
-    </div>
-    <div class="agent-list" id="agentGrid"></div>
-
-    <span class="eyebrow spaced">RESUMEN</span>
-    <div class="kpi-grid" id="kpiGrid"></div>
-
-    <!-- Gasto real de Claude Code, leído de sus propios transcripts -->
-    <div class="usage-card" id="usageCard"></div>
-
-    <div class="spark-card">
-      <div class="row baseline between">
-        <span class="field-label">RUNS · 24 H</span>
-        <span class="mono muted small" id="sparkTotal"></span>
-      </div>
-      <div class="spark" id="spark"></div>
-    </div>
+    <!-- Control de código de la carpeta activa: rama, cambios, plan de commits
+         y últimos commits -->
+    <div class="git-card" id="gitCard"></div>
   </aside>
 </div>
 
