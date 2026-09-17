@@ -1,14 +1,16 @@
 // Simulador de LM Studio para desarrollar sin cargar el modelo.
 // Responde /v1/models y /v1/chat/completions con streaming SSE.
-// Incluye FORZAR_ERROR en el prompt para que responda 500, o FORZAR_RAZONAMIENTO
-// para que mande reasoning_content antes de la respuesta.
+// En el prompt: FORZAR_ERROR responde 500, FORZAR_RAZONAMIENTO manda
+// reasoning_content antes de la respuesta, FORZAR_CUELGUE abre el stream y no
+// manda nada (para probar el timeout de inactividad) y FORZAR_LENTO escribe un
+// token por segundo.
 const http = require("http");
 
 // MOCK_PORT permite usarlo con LM Studio real abierto en el 1234
 const PORT = parseInt(process.env.MOCK_PORT, 10) || 1234;
 const MODEL = "omnicoder-9b";
 
-function streamReply(res, text, thinking = "") {
+function streamReply(res, text, thinking = "", everyMs = 40) {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
   // Primero el razonamiento (si lo hay) y luego la respuesta, como un modelo que piensa
   const pieces = [
@@ -24,7 +26,7 @@ function streamReply(res, text, thinking = "") {
     }
     const chunk = { choices: [{ delta: pieces[i++] }] };
     res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-  }, 40);
+  }, everyMs);
   res.on("close", () => clearInterval(timer));
 }
 
@@ -32,7 +34,8 @@ http
   .createServer((req, res) => {
     if (req.method === "GET" && req.url === "/v1/models") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ data: [{ id: MODEL }] }));
+      // MOCK_SIN_MODELO simula el servidor encendido sin modelo cargado
+      return res.end(JSON.stringify({ data: process.env.MOCK_SIN_MODELO ? [] : [{ id: MODEL }] }));
     }
 
     if (req.method === "POST" && req.url === "/v1/chat/completions") {
@@ -41,6 +44,11 @@ http
       req.on("end", () => {
         const { messages = [] } = JSON.parse(body || "{}");
         const prompt = messages.at(-1)?.content || "";
+        if (prompt.includes("FORZAR_CUELGUE")) {
+          // Un LM Studio saturado: acepta la petición y nunca escribe nada
+          res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+          return;
+        }
         if (prompt.includes("FORZAR_ERROR")) {
           res.writeHead(500, { "Content-Type": "application/json" });
           return res.end(JSON.stringify({ error: "Error simulado por FORZAR_ERROR" }));
@@ -51,7 +59,7 @@ http
         const thinking = prompt.includes("FORZAR_RAZONAMIENTO")
           ? "El usuario pide validar un email. Una regex sencilla basta: algo antes de la arroba, dominio y extensión. No hace falta cubrir todo el RFC 5322."
           : "";
-        streamReply(res, reply, thinking);
+        streamReply(res, reply, thinking, prompt.includes("FORZAR_LENTO") ? 1000 : 40);
       });
       return;
     }
