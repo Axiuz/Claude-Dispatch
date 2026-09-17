@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Dispatch</title>
+<title>Singularity</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -22,8 +22,8 @@
   <!-- ============ CARRIL IZQUIERDO: marca, proyectos, agentes y gasto ============ -->
   <aside class="rail rail-left">
     <div class="brand">
-      <span class="logo">✳</span>
-      <h1>Dispatch</h1>
+      <img class="brand-mark" src="singularity.png" alt="Singularity" />
+      <h1 class="visually-hidden">Singularity</h1>
     </div>
     <button class="status-pill" id="statusPill" title="Comprobar de nuevo">
       <span class="dot" id="statusDot"></span>
@@ -246,6 +246,15 @@
             <div class="segmented" id="cfgParallel"></div>
             <div class="help">LM Studio te muestra su límite de paralelismo en la pestaña Developer. No lo excedas.</div>
           </div>
+          <div>
+            <label class="field-label" for="cfgSessionLimit">TOPE DE TOKENS POR SESIÓN (5 H)</label>
+            <input id="cfgSessionLimit" type="text" class="mono" />
+          </div>
+          <div>
+            <label class="field-label" for="cfgWeeklyLimit">TOPE DE TOKENS POR SEMANA</label>
+            <input id="cfgWeeklyLimit" type="text" class="mono" />
+            <div class="help">Contra estos topes se miden las dos barras de TOKENS DE CLAUDE CODE. Se escriben como 100M o como 100000000; con 0 la barra desaparece.</div>
+          </div>
           <div class="info-box">
             <span class="field-label">ESTADO DEL SERVIDOR</span>
             <div class="info-row"><span class="muted">Modelos disponibles</span><span class="mono" id="infoModels">—</span></div>
@@ -257,6 +266,23 @@
             <span id="configSaved" class="saved-msg"></span>
           </div>
         </div>
+      </div>
+
+      <!-- Diagnóstico: comprueba el panel entero y, si se marca, recompila la
+           app y reinicia el servidor -->
+      <div class="debug-block">
+        <div class="page-title">Diagnóstico</div>
+        <div class="page-desc">
+          Comprueba que el servidor, sus rutas, los tests y LM Studio siguen en pie.
+          Las dos últimas casillas van apagadas: recompilan la app y reinician el servidor.
+        </div>
+        <div class="debug-opts" id="debugOpts"></div>
+        <div class="row">
+          <button id="debugRunBtn" class="btn primary big">Ejecutar diagnóstico</button>
+          <button id="debugAllBtn" class="btn">Marcar todo</button>
+          <span class="muted" id="debugHint"></span>
+        </div>
+        <div class="debug-steps" id="debugSteps"></div>
       </div>
     </section>
   </main>

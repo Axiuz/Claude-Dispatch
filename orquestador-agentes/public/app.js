@@ -389,6 +389,32 @@ function connectStream() {
     renderProjects();
   });
 
+  es.addEventListener("debug:start", (e) => {
+    const { runId, steps } = JSON.parse(e.data);
+    debugReport = {
+      runId,
+      running: true,
+      results: steps.map((s) => ({ ...s, status: "pending" })),
+      summary: null,
+      finishedAt: null,
+    };
+    saveDebugReport();
+    renderDebug();
+  });
+
+  es.addEventListener("debug:step", (e) => {
+    upsertDebugStep(JSON.parse(e.data));
+    saveDebugReport();
+  });
+
+  es.addEventListener("debug:done", (e) => {
+    const report = JSON.parse(e.data);
+    debugReport = { ...report, running: false };
+    saveDebugReport();
+    renderDebug();
+    if (report.results?.some((r) => r.id === "reinicio" && r.status === "ok")) waitForServer();
+  });
+
   es.onerror = () => {
     // EventSource reintenta solo; no hacemos nada
   };
@@ -1011,6 +1037,32 @@ function updateRunStream(run) {
 // ================= Tokens de Claude Code =================
 // El KPI da el número de hoy; esta tarjeta dice de qué está hecho. La caché va
 // aparte porque es la mayor parte del total y cuesta distinto que lo demás.
+const DEFAULT_SESSION_LIMIT = 100000000;
+const DEFAULT_WEEKLY_LIMIT = 600000000;
+
+// "100M", "600 000 000" o un número pelado; 0 o basura = sin tope
+function parseTokenLimit(value) {
+  const text = String(value ?? "").trim().replace(/[\s,_]/g, "");
+  const m = /^(\d+(?:\.\d+)?)([kKmMbB]?)$/.exec(text);
+  if (!m) return 0;
+  const scale = { k: 1e3, m: 1e6, b: 1e9 }[m[2].toLowerCase()] || 1;
+  return Math.round(parseFloat(m[1]) * scale);
+}
+
+function usageBar(label, used, limit, note) {
+  const pct = limit > 0 ? (used / limit) * 100 : null;
+  const level = pct === null ? "" : pct >= 90 ? " hot" : pct >= 75 ? " warn" : "";
+  return `
+    <div class="usage-gauge">
+      <div class="usage-gauge-head">
+        <span>${label}</span>
+        <span class="mono">${pct === null ? formatTokens(used) : `${Math.round(pct)}% · ${formatTokens(used)} / ${formatTokens(limit)}`}</span>
+      </div>
+      ${limit > 0 ? `<div class="usage-track"><div class="usage-fill${level}" style="width:${Math.min(100, pct).toFixed(1)}%"></div></div>` : ""}
+      ${note ? `<div class="usage-note">${note}</div>` : ""}
+    </div>`;
+}
+
 function renderClaudeUsage() {
   const card = $("#usageCard");
   if (!claudeUsage || !claudeUsage.available) {
@@ -1022,7 +1074,7 @@ function renderClaudeUsage() {
     return;
   }
 
-  const { today, window: win, sessions: ses, models, lastAt } = claudeUsage;
+  const { today, window: win, sessions: ses, models, lastAt, session, weekly } = claudeUsage;
   const rows = [
     ["Entrada", today.input],
     ["Salida", today.output],
@@ -1030,11 +1082,21 @@ function renderClaudeUsage() {
     ["Caché leída", today.cacheRead],
   ];
   const top = models[0];
+  const sessionLimit = parseTokenLimit(config.claude_session_limit ?? DEFAULT_SESSION_LIMIT);
+  const weeklyLimit = parseTokenLimit(config.claude_weekly_limit ?? DEFAULT_WEEKLY_LIMIT);
+  const blockHours = claudeUsage.blockHours || 5;
+  const sessionNote = session?.active
+    ? `reinicia a las ${formatClock(session.resetAt)} · ${ses.active} ${ses.active === 1 ? "sesión activa" : "sesiones activas"}`
+    : "sin sesión en curso";
 
   card.innerHTML = `
     <div class="row baseline between">
       <span class="field-label">TOKENS DE CLAUDE CODE</span>
       <span class="mono muted small">${lastAt ? formatTime(lastAt) : ""}</span>
+    </div>
+    <div class="usage-gauges">
+      ${usageBar(`Sesión (${blockHours} h)`, session?.total || 0, sessionLimit, sessionNote)}
+      ${usageBar("Semana", weekly?.total ?? win.total, weeklyLimit, `últimos ${claudeUsage.days} días · ${ses.today} sesiones hoy`)}
     </div>
     <div class="usage-rows">
       ${rows
@@ -1045,8 +1107,8 @@ function renderClaudeUsage() {
         .join("")}
     </div>
     <div class="usage-foot">
-      <span>${ses.active} ${ses.active === 1 ? "sesión activa" : "sesiones activas"} · ${ses.today} hoy</span>
-      <span class="mono">${formatTokens(win.total)} en ${claudeUsage.days} d</span>
+      <span>Hoy</span>
+      <span class="mono">${formatTokens(today.total)}</span>
     </div>
     ${top ? `<div class="usage-foot"><span>${escapeHtml(shortModel(top.model))}</span><span class="mono">${formatTokens(top.total)}</span></div>` : ""}
   `;
@@ -2063,6 +2125,8 @@ async function loadConfig() {
   config = await res.json();
   $("#cfgLmUrl").value = config.lmstudio_url;
   $("#cfgModel").value = config.model;
+  $("#cfgSessionLimit").value = formatTokens(config.claude_session_limit ?? DEFAULT_SESSION_LIMIT);
+  $("#cfgWeeklyLimit").value = formatTokens(config.claude_weekly_limit ?? DEFAULT_WEEKLY_LIMIT);
   selectedParallel = config.max_parallel || 1;
   $("#infoPort").textContent = `:${config.app_port || 3131}`;
   renderParallel();
@@ -2077,11 +2141,189 @@ $("#saveConfigBtn").addEventListener("click", async () => {
       lmstudio_url: $("#cfgLmUrl").value.trim(),
       model: $("#cfgModel").value.trim(),
       max_parallel: selectedParallel,
+      claude_session_limit: parseTokenLimit($("#cfgSessionLimit").value),
+      claude_weekly_limit: parseTokenLimit($("#cfgWeeklyLimit").value),
     }),
   });
   await loadConfig();
+  renderClaudeUsage();
   flash("#configSaved", "Guardado ✓");
   refreshStatus();
+});
+
+// ================= Diagnóstico =================
+// El informe vive en localStorage mientras corre: el último paso puede reiniciar
+// el servidor, y sin eso la pantalla de resultados se iría con la conexión.
+const DEBUG_STORE = "singularity.debug";
+let debugCatalog = [];
+let debugSelected = new Set();
+let debugReport = { runId: null, running: false, results: [], summary: null, finishedAt: null };
+let debugOpen = new Set();
+let debugWaiting = false;
+
+// El informe se guarda en cada evento, no al final: el último paso puede reiniciar
+// el servidor y llevarse la conexión, y al recargar esto es lo único que queda.
+function saveDebugReport() {
+  try {
+    localStorage.setItem(DEBUG_STORE, JSON.stringify(debugReport));
+  } catch (_) {}
+}
+
+function restoreDebugReport() {
+  try {
+    const raw = localStorage.getItem(DEBUG_STORE);
+    if (raw) debugReport = JSON.parse(raw);
+  } catch (_) {}
+}
+
+// Al abrir el panel: el catálogo del servidor, los pasos obligatorios marcados y
+// el informe guardado; si no hay ninguno, el último que recuerde el servidor.
+async function loadDebug() {
+  const info = await api("/api/debug");
+  debugCatalog = info.steps || [];
+  if (!debugSelected.size) debugCatalog.filter((s) => !s.optional).forEach((s) => debugSelected.add(s.id));
+  restoreDebugReport();
+  if (!debugReport.results?.length && info.last) debugReport = { ...info.last, running: false };
+  if (info.running) debugReport.running = true;
+  renderDebug();
+}
+
+function renderDebug() {
+  const opts = $("#debugOpts");
+  if (!opts) return;
+  opts.innerHTML = debugCatalog
+    .map(
+      (step) => `
+      <label class="debug-opt${step.optional ? " heavy" : ""}">
+        <input type="checkbox" data-step="${step.id}" ${debugSelected.has(step.id) ? "checked" : ""} />
+        <span class="debug-opt-label">${escapeHtml(step.label)}</span>
+        <span class="debug-opt-hint">${escapeHtml(step.hint || "")}</span>
+      </label>`
+    )
+    .join("");
+  opts.querySelectorAll("input[data-step]").forEach((input) => {
+    input.addEventListener("change", () => {
+      if (input.checked) debugSelected.add(input.dataset.step);
+      else debugSelected.delete(input.dataset.step);
+      renderDebugHint();
+    });
+  });
+  renderDebugHint();
+  renderDebugSteps();
+}
+
+function renderDebugHint() {
+  const btn = $("#debugRunBtn");
+  const hint = $("#debugHint");
+  if (!btn || !hint) return;
+  btn.disabled = debugReport.running || debugSelected.size === 0;
+  btn.textContent = debugReport.running ? "Ejecutando…" : "Ejecutar diagnóstico";
+  const pesados = [...debugSelected].filter((id) => debugCatalog.find((s) => s.id === id)?.optional);
+  if (debugWaiting) hint.textContent = "Esperando a que el servidor vuelva…";
+  else if (pesados.includes("reinicio")) hint.textContent = "El reinicio cierra las terminales abiertas.";
+  else if (pesados.includes("build")) hint.textContent = "El rebuild tarda un par de minutos.";
+  else hint.textContent = `${debugSelected.size} comprobaciones`;
+}
+
+const DEBUG_ICON = { ok: "✓", fail: "✗", skip: "–", running: "●" };
+
+// Se repinta la lista entera en cada evento. Son nueve renglones: no compensa
+// parchear el DOM como en el timeline, donde llegan cientos de tokens por run.
+function renderDebugSteps() {
+  const host = $("#debugSteps");
+  if (!host) return;
+  const { results, summary, finishedAt } = debugReport;
+  if (!results || !results.length) {
+    host.innerHTML = '<div class="debug-empty">Sin diagnósticos todavía.</div>';
+    return;
+  }
+  const cabecera = summary
+    ? `<div class="debug-summary-bar ${summary.ok ? "ok" : "fail"}">
+         <span>${summary.ok ? "Todo en verde" : `${summary.failed} ${summary.failed === 1 ? "comprobación falla" : "comprobaciones fallan"}`}</span>
+         <span class="mono">${summary.total} pasos · ${formatSeconds(summary.ms, 0)}${finishedAt ? ` · ${formatTime(finishedAt)}` : ""}</span>
+       </div>`
+    : "";
+  host.innerHTML =
+    cabecera +
+    results
+      .map(
+        (r) => `
+      <div class="debug-step ${r.status}">
+        <button class="debug-step-head" data-out="${r.id}">
+          <span class="debug-dot">${DEBUG_ICON[r.status] || "·"}</span>
+          <span class="debug-step-label">${escapeHtml(r.label || r.id)}</span>
+          <span class="debug-step-summary">${escapeHtml(r.summary || "")}</span>
+          <span class="mono debug-step-ms">${r.ms ? formatSeconds(r.ms, r.ms > 10000 ? 0 : 1) : ""}</span>
+        </button>
+        ${r.output && debugOpen.has(r.id) ? `<pre class="debug-out">${escapeHtml(r.output)}</pre>` : ""}
+      </div>`
+      )
+      .join("");
+  host.querySelectorAll("[data-out]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.out;
+      if (debugOpen.has(id)) debugOpen.delete(id);
+      else debugOpen.add(id);
+      renderDebugSteps();
+    });
+  });
+}
+
+// Un evento puede ser el paso entero o una línea suelta de salida del rebuild.
+// Las líneas se acumulan recortadas a las últimas 400: un build entero son miles
+// y el panel no tiene que guardarlas todas.
+function upsertDebugStep(ev) {
+  const results = debugReport.results || (debugReport.results = []);
+  const idx = results.findIndex((r) => r.id === ev.id);
+  if (ev.status === "log") {
+    if (idx < 0) return;
+    results[idx].output = `${results[idx].output || ""}${ev.line}\n`.split("\n").slice(-400).join("\n");
+    if (debugOpen.has(ev.id)) renderDebugSteps();
+    return;
+  }
+  if (idx >= 0) results[idx] = { ...results[idx], ...ev };
+  else results.push(ev);
+  renderDebugSteps();
+}
+
+// El servidor muere en el paso de reinicio: se le pregunta hasta que conteste y
+// entonces se recarga el panel, que es lo que devuelve runs, plan y terminales.
+async function waitForServer() {
+  debugWaiting = true;
+  renderDebugHint();
+  for (let i = 0; i < 120; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const res = await fetch("/api/config", { cache: "no-store" });
+      if (res.ok) {
+        location.reload();
+        return;
+      }
+    } catch (_) {}
+  }
+  debugWaiting = false;
+  renderDebugHint();
+}
+
+$("#debugRunBtn").addEventListener("click", async () => {
+  if (debugReport.running) return;
+  debugOpen.clear();
+  debugReport = { runId: null, running: true, results: [], summary: null, finishedAt: null };
+  saveDebugReport();
+  renderDebug();
+  try {
+    await api("/api/debug/run", { steps: [...debugSelected] });
+  } catch (err) {
+    debugReport.running = false;
+    debugReport.results = [{ id: "error", label: "No arrancó", status: "fail", summary: String(err.message || err) }];
+    renderDebug();
+  }
+});
+
+$("#debugAllBtn").addEventListener("click", () => {
+  const todos = debugSelected.size === debugCatalog.length;
+  debugSelected = new Set(todos ? debugCatalog.filter((s) => !s.optional).map((s) => s.id) : debugCatalog.map((s) => s.id));
+  renderDebug();
 });
 
 // ================= Instrucciones para Claude Code =================
@@ -2167,6 +2409,9 @@ function flash(sel, msg) {
 function formatSeconds(ms, digits = 1) {
   return `${(ms / 1000).toFixed(digits)}s`;
 }
+function formatClock(iso) {
+  return new Date(iso).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+}
 function formatTime(iso) {
   return new Date(iso).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
@@ -2219,6 +2464,7 @@ async function init() {
 
   await refreshStatus();
   connectStream();
+  loadDebug().catch(() => {});
   setInterval(refreshStatus, 6000);
   // Git cambia por fuera del panel (Claude Code, la terminal, otro editor):
   // la única forma de enterarse es volver a preguntar

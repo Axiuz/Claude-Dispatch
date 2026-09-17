@@ -1,7 +1,9 @@
 :root {
   /* Gris neutro, casi negro: las superficies no tienen tinte y el contraste
-     entre niveles es lo que separa carril, panel y hundido. El oro #d4af37 y el
-     crema del texto son la marca.
+     entre niveles es lo que separa carril, panel y hundido. El oro manda y es
+     la marca; el azul y el violeta salen del disco de Singularity y entran por
+     los secundarios. El naranja queda para los avisos y nada más: con más de
+     eso, el panel deja de leerse y se vuelve un semáforo.
      Todo el color de la app sale de este bloque —panel, Monaco, xterm y el
      mapa—, no hay hex sueltos fuera, así que repintar la app se hace solo aquí. */
 
@@ -26,29 +28,30 @@
   --muted: #a2a29a;
   --faint: #8a8a82;
 
-  --accent: #d4af37;
-  --accent-hover: #ecc85a;
-  --accent-soft: rgba(212, 175, 55, 0.14);
-  --accent-line: rgba(212, 175, 55, 0.45);
-  --accent-glow: rgba(212, 175, 55, 0.7);
+  --accent: #f0c040;
+  --accent-hover: #ffd968;
+  --accent-soft: rgba(240, 192, 64, 0.16);
+  --accent-line: rgba(240, 192, 64, 0.5);
+  --accent-glow: rgba(240, 192, 64, 0.8);
   --on-accent: #0d0d0d;
 
-  /* Teal, el segundo color de la marca. El teal puro es oscuro: sirve para
-     fondos y bordes, y --green es su versión legible sobre fondo oscuro. */
-  --teal: #0f7c7c;
-  --teal-deep: #083c3c;
-  --teal-soft: rgba(15, 124, 124, 0.18);
-  --teal-line: rgba(15, 124, 124, 0.45);
+  /* El azul del disco de acreción. Se sigue llamando teal porque es el segundo
+     color y está cableado en medio panel; lo que cambió es el tono. Oscuro de
+     por sí: sirve para fondos y bordes, y --green es lo legible sobre negro. */
+  --teal: #4a6fd4;
+  --teal-deep: #1c2a5c;
+  --teal-soft: rgba(74, 111, 212, 0.2);
+  --teal-line: rgba(74, 111, 212, 0.5);
 
-  --green: #2fb3a4;
-  --green-soft: rgba(15, 124, 124, 0.16);
-  --green-track: rgba(15, 124, 124, 0.38);
-  --amber: #dba13c;
-  --amber-soft: rgba(219, 161, 60, 0.12);
-  --red: #e8695a;
-  --red-soft: rgba(232, 105, 90, 0.12);
-  --red-line: rgba(232, 105, 90, 0.34);
-  --violet: #b08ec4;
+  --green: #3ad4c2;
+  --green-soft: rgba(58, 212, 194, 0.16);
+  --green-track: rgba(74, 111, 212, 0.42);
+  --amber: #f0a838;
+  --amber-soft: rgba(240, 168, 56, 0.14);
+  --red: #ff6f5e;
+  --red-soft: rgba(255, 111, 94, 0.14);
+  --red-line: rgba(255, 111, 94, 0.4);
+  --violet: #a89bff;
 
   --shadow: rgba(0, 0, 0, 0.6);
   --backdrop: rgba(0, 0, 0, 0.6);
@@ -180,8 +183,22 @@ body.resizing-x { cursor: col-resize; user-select: none; }
 body.resizing-x * { cursor: col-resize !important; }
 
 /* ---------- Marca y estado ---------- */
-.brand { display: flex; align-items: center; gap: 9px; }
+/* La marca es la imagen entera, con su nombre debajo del disco. El PNG viene
+   con transparencia y su texto es casi blanco: solo se lee sobre el fondo
+   oscuro del carril, que es donde vive. Va recortado a su contenido, sin el
+   aire que traía el original: cuadrado ocupaba el doble de alto para el mismo
+   ancho y se comía el carril. */
+.brand { display: flex; align-items: center; justify-content: center; padding: 0 0 2px; }
+.brand-mark { width: 100%; max-width: 104px; height: auto; display: block; }
 .brand h1 { font-size: 15px; margin: 0; font-weight: 600; }
+
+/* Fuera de la vista pero presente para lectores de pantalla y para el título */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip-path: inset(50%); overflow: hidden; white-space: nowrap;
+}
+
 .logo { font-size: 18px; color: var(--accent); text-shadow: 0 0 14px var(--accent-glow); }
 
 .status-pill {
@@ -479,6 +496,64 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
   font-size: 10.5px; color: var(--faint); border-top: 1px solid var(--border-soft); padding-top: 6px;
 }
 .usage-empty { font-size: 11.5px; color: var(--faint); }
+.usage-gauges { display: flex; flex-direction: column; gap: 9px; }
+.usage-gauge { display: flex; flex-direction: column; gap: 4px; }
+.usage-gauge-head { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; color: var(--text-2); }
+.usage-gauge-head .mono { color: var(--text); font-size: 11px; }
+.usage-track { height: 6px; border-radius: 3px; background: var(--sunken); border: 1px solid var(--border-soft); overflow: hidden; }
+.usage-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s ease; }
+.usage-fill.warn { background: var(--amber); }
+.usage-fill.hot { background: var(--red); }
+.usage-note { font-size: 10px; color: var(--faint); }
+
+/* ---------- Diagnóstico (pestaña Conexión) ---------- */
+.debug-block {
+  display: flex; flex-direction: column; gap: 12px;
+  border-top: 1px solid var(--border-soft); padding-top: 18px; margin-top: 4px;
+}
+.debug-opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.debug-opt {
+  display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; cursor: pointer;
+}
+.debug-opt:hover { border-color: var(--border-strong); }
+.debug-opt input { grid-row: span 2; accent-color: var(--accent); }
+.debug-opt-label { font-size: 12px; color: var(--text-2); }
+.debug-opt-hint { grid-column: 2; font-size: 10.5px; color: var(--faint); line-height: 1.35; }
+.debug-opt.heavy { border-color: var(--amber-soft); background: var(--amber-soft); }
+.debug-opt.heavy .debug-opt-label { color: var(--amber); }
+
+.debug-steps { display: flex; flex-direction: column; gap: 6px; }
+.debug-empty { font-size: 12px; color: var(--faint); }
+.debug-summary-bar {
+  display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
+  border-radius: 8px; padding: 8px 11px; font-size: 12px; margin-bottom: 4px;
+  background: var(--green-soft); color: var(--green);
+}
+.debug-summary-bar.fail { background: var(--red-soft); color: var(--red); }
+.debug-summary-bar .mono { font-size: 11px; opacity: 0.85; }
+
+.debug-step { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.debug-step-head {
+  width: 100%; display: grid; grid-template-columns: 18px 150px 1fr auto; gap: 10px; align-items: baseline;
+  background: none; border: 0; color: var(--text-2); text-align: left; cursor: pointer;
+  padding: 9px 11px; font-size: 12px;
+}
+.debug-step-head:hover { background: var(--panel-active); }
+.debug-dot { color: var(--faint); font-size: 12px; }
+.debug-step.ok .debug-dot { color: var(--green); }
+.debug-step.fail .debug-dot { color: var(--red); }
+.debug-step.fail { border-color: var(--red-line); }
+.debug-step.running .debug-dot { color: var(--accent); animation: glow 1.2s infinite; }
+.debug-step-label { color: var(--text); }
+.debug-step-summary { color: var(--muted); overflow-wrap: anywhere; }
+.debug-step-ms { color: var(--faint); font-size: 11px; }
+.debug-out {
+  margin: 0; padding: 10px 12px; max-height: 320px; overflow: auto;
+  background: var(--sunken); border-top: 1px solid var(--border-soft);
+  font-family: var(--mono); font-size: 11px; color: var(--code); white-space: pre-wrap;
+}
 
 /* ---------- Control de código (Git) ---------- */
 .git-card {
