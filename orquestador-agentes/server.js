@@ -7,6 +7,7 @@ const pty = require("node-pty");
 const { buildGraph } = require("./codegraph");
 const { COLUMNS, COLUMN_AFTER_RUN, columnFor, placeStep } = require("./kanban");
 const safepath = require("./safepath");
+const claudeusage = require("./claudeusage");
 
 const DEFAULT_DATA_DIR = path.join(__dirname, "data");
 // La app de macOS pasa ORQ_DATA_DIR para guardar los datos fuera del bundle
@@ -287,10 +288,20 @@ function killSession(s) {
   sessions.delete(s.id);
 }
 
+// ============ Tokens de Claude Code ============
+// Lo que gastan los agentes locales lo sabemos por los runs; lo que gasta Claude
+// Code no pasa por aquí, así que se lee de sus propios transcripts. El tracker
+// avisa solo cuando cambia algo, y eso va derecho al panel.
+const usageTracker = claudeusage.createTracker({
+  onChange: (snapshot) => broadcast("claude:usage", snapshot),
+});
+usageTracker.start();
+
 // Que ninguna sesión sobreviva al orquestador (launcher.sh stop manda SIGTERM)
 for (const signal of ["SIGTERM", "SIGINT"]) {
   process.on(signal, () => {
     sessions.forEach(killSession);
+    usageTracker.stop();
     process.exit(0);
   });
 }
@@ -882,6 +893,12 @@ app.post("/delegate", async (req, res) => {
         : { agent: tasks[i].agent, error: String(r.reason?.message || r.reason) }
     ),
   });
+});
+
+// ---- Tokens que lleva gastados Claude Code ----
+app.get("/api/claude-usage", (req, res) => {
+  if (req.query.refresh) usageTracker.tick();
+  res.json(usageTracker.snapshot());
 });
 
 // ---- Estado de LM Studio ----

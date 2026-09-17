@@ -364,58 +364,6 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .run-stream.thinking { color: var(--faint); font-style: italic; }
 .run-stream.waiting { color: var(--amber); font-style: italic; }
 
-/* ---------- En vivo ---------- */
-.live-empty { flex: 1; }
-.live-grid {
-  flex: 1; min-height: 0; display: grid; gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  grid-auto-rows: minmax(280px, 1fr);
-}
-.live-grid:empty { display: none; }
-
-.live-pane {
-  background: var(--panel); border: 1px solid var(--border); border-top: 2px solid var(--faint);
-  border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-height: 0;
-}
-.live-pane.running { border-top-color: var(--accent); }
-.live-pane.done { border-top-color: var(--green); }
-.live-pane.error { border-top-color: var(--red); }
-.live-pane.cancelled { border-top-color: var(--faint); }
-.live-pane.queued { border-top-color: var(--amber); }
-.live-pane.queued .live-output { opacity: 0.55; }
-
-.live-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.live-state {
-  font-size: 9.5px; letter-spacing: 0.5px; padding: 2px 6px; border-radius: 9px;
-  background: var(--panel-3); color: var(--muted); text-transform: uppercase; flex: none;
-}
-.live-pane.running .live-state { background: var(--accent-soft); color: var(--accent); }
-.live-pane.done .live-state { background: var(--green-soft); color: var(--green); }
-.live-pane.error .live-state { background: var(--red-soft); color: var(--red); }
-.live-pane.queued .live-state { background: var(--amber-soft); color: var(--amber); }
-.live-pane .run-time { flex: none; }
-.live-open { flex: none; }
-.live-cancel { flex: none; color: var(--faint); }
-.live-cancel:hover { color: var(--red); }
-
-.live-prompt { font-size: 11.5px; color: var(--muted); }
-.live-prompt summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.live-prompt summary span { color: var(--text-2); }
-.live-prompt pre { max-height: 140px; margin-top: 6px; }
-
-.live-output {
-  flex: 1; min-height: 0; margin: 0; overflow-y: auto;
-  background: var(--sunken); border: 1px solid var(--border-soft); border-radius: 7px; padding: 10px 12px;
-  font-family: var(--mono); font-size: 11.5px; line-height: 1.6; color: var(--code); white-space: pre-wrap;
-}
-.live-output.error-text { color: var(--red); }
-.live-output .placeholder { color: var(--faint); }
-.reasoning {
-  color: var(--faint); font-style: italic; border-left: 2px solid var(--border-strong);
-  padding-left: 9px; margin-bottom: 10px;
-}
-.reasoning:empty { display: none; }
-
 /* ---------- Carril derecho: agentes y KPIs ---------- */
 .agent-list { display: flex; flex-direction: column; gap: 8px; }
 .agent-card {
@@ -454,6 +402,21 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .kpi .kvalue { font-size: 18px; font-weight: 600; font-family: var(--mono); margin-top: 2px; }
 .kpi .kvalue.empty { color: var(--faint); }
 .kpi .ksub { font-size: 10.5px; color: var(--faint); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Desglose del gasto de Claude Code: acompaña al KPI TOKENS CLAUDE */
+.usage-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px; display: flex; flex-direction: column; gap: 7px;
+}
+.usage-card .field-label { margin: 0; font-size: 9.5px; }
+.usage-rows { display: flex; flex-direction: column; gap: 3px; }
+.usage-row { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; color: var(--text-2); }
+.usage-row .mono { color: var(--text); }
+.usage-foot {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 10.5px; color: var(--faint); border-top: 1px solid var(--border-soft); padding-top: 6px;
+}
+.usage-empty { font-size: 11.5px; color: var(--faint); }
 
 .spark-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 7px; }
 .spark-card .field-label { margin: 0; font-size: 9.5px; }
@@ -608,6 +571,8 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 }
 .modal-title { font-size: 14px; font-weight: 600; }
 #modalBody { display: flex; flex-direction: column; gap: 12px; }
+.modal-cancel { color: var(--faint); margin-left: auto; }
+.modal-cancel:hover { color: var(--red); }
 .modal-meta { display: flex; flex-wrap: wrap; gap: 16px; font-size: 11px; color: var(--muted); font-family: var(--mono); }
 .modal-box {
   margin: 0; background: var(--panel-2); border-radius: 7px; padding: 9px 11px;

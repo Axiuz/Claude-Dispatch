@@ -8,6 +8,8 @@ let currentPlan = null;
 let projects = [];
 let sessions = []; // sesiones de terminal: {id, cwd, name, startedAt, exited, exitCode}
 let lastStatus = null;
+// Tokens que lleva gastados Claude Code, leídos de sus transcripts por el servidor
+let claudeUsage = null;
 const agentState = {}; // id -> {status, taskLabel, lastDuration, count}
 
 let activeSessionId = null;
@@ -21,7 +23,7 @@ const PARALLEL_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8];
 
 // Un run espera turno ("queued") antes de correr: las dos cuentan como activas
 const isActive = (run) => run.status === "queued" || run.status === "running";
-const WIDE_TABS = ["vivo", "mapa", "agentes", "consola", "conexion"];
+const WIDE_TABS = ["mapa", "agentes", "consola", "conexion"];
 
 // ================= API =================
 async function api(url, body, method) {
@@ -282,7 +284,6 @@ function connectStream() {
     renderAgents();
     renderTimeline();
     renderKpis();
-    renderLive();
   });
 
   // Se parchea el DOM de cada vista sin re-renderizar, para que el streaming fluya
@@ -293,8 +294,6 @@ function connectStream() {
     run.response = partial;
     run.reasoning = reasoning || "";
     updateRunStream(run);
-    const pane = document.querySelector(`[data-live="${id}"]`);
-    if (pane) updateLivePane(pane, run);
     const peek = document.querySelector(`[data-peek="${id}"]`);
     if (peek) peek.textContent = peekText(run);
     if (modalRunId === id) updateModalStream(run);
@@ -323,7 +322,6 @@ function connectStream() {
     renderAgents();
     renderTimeline();
     renderKpis();
-    renderLive();
     if (modalRunId === updated.id) openRunModal(updated.id);
   });
 
@@ -346,8 +344,15 @@ function connectStream() {
     agents = JSON.parse(e.data);
     renderAgents();
     renderConsoleAgents();
-    renderLive();
     renderInstructions();
+  });
+
+  // Claude Code no pasa por el orquestador: su gasto lo lee el servidor de los
+  // transcripts y lo empuja aquí cada vez que cambia
+  es.addEventListener("claude:usage", (e) => {
+    claudeUsage = JSON.parse(e.data);
+    renderClaudeUsage();
+    renderKpis();
   });
 
   es.addEventListener("queue:updated", (e) => {
@@ -359,7 +364,6 @@ function connectStream() {
     runs = [];
     renderTimeline();
     renderKpis();
-    renderLive();
   });
 
   es.addEventListener("projects:updated", (e) => {
@@ -828,7 +832,15 @@ function renderKpis() {
       value: finished.length ? `${((errors.length / finished.length) * 100).toFixed(1)}%` : null,
       sub: `${errors.length} de ${finished.length} runs`,
     },
-    { label: "TOKENS", value: done.length ? `~${formatCount(tokens)}` : null, sub: "estimados" },
+    {
+      label: "TOKENS CLAUDE",
+      value: claudeUsage?.available ? formatTokens(claudeUsage.today.total) : null,
+      sub: claudeUsage?.available
+        ? `hoy · ${claudeUsage.today.messages} respuestas`
+        : "sin transcripts",
+      always: true,
+    },
+    { label: "TOKENS AGENTES", value: done.length ? `~${formatCount(tokens)}` : null, sub: "estimados" },
     {
       label: "EN CURSO",
       value: running,
@@ -927,81 +939,58 @@ function updateRunStream(run) {
   else if (runs.indexOf(run) < 40) renderTimeline();
 }
 
-// ================= En vivo =================
-// Un panel por run: todos los que están en curso y, en los huecos que queden
-// hasta el límite de paralelismo, las últimas respuestas terminadas.
-function liveRuns() {
-  const slots = Math.max(maxParallel(), 2);
-  const active = runs.filter(isActive);
-  const finished = runs.filter((r) => !isActive(r)).slice(0, Math.max(slots - active.length, 0));
-  const shown = new Set([...active, ...finished]);
-  return runs.filter((r) => shown.has(r));
-}
+// ================= Tokens de Claude Code =================
+// El KPI da el número de hoy; esta tarjeta dice de qué está hecho. La caché va
+// aparte porque es la mayor parte del total y cuesta distinto que lo demás.
+function renderClaudeUsage() {
+  const card = $("#usageCard");
+  if (!claudeUsage || !claudeUsage.available) {
+    card.innerHTML = `
+      <div class="row baseline between">
+        <span class="field-label">TOKENS DE CLAUDE CODE</span>
+      </div>
+      <div class="usage-empty">Sin transcripts de Claude Code en esta máquina.</div>`;
+    return;
+  }
 
+  const { today, window: win, sessions: ses, models, lastAt } = claudeUsage;
+  const rows = [
+    ["Entrada", today.input],
+    ["Salida", today.output],
+    ["Caché escrita", today.cacheCreate],
+    ["Caché leída", today.cacheRead],
+  ];
+  const top = models[0];
 
-function renderLive() {
-  const grid = $("#liveGrid");
-  const list = liveRuns();
-  const active = runs.filter(isActive).length;
-  $("#liveCount").textContent = active ? String(active) : "";
-  $("#liveEmpty").hidden = list.length > 0;
-
-  // Reutilizar los paneles que ya existen: recrearlos perdería el scroll y el
-  // desplegable de la tarea
-  const existing = new Map([...grid.children].map((el) => [el.dataset.live, el]));
-  list.forEach((run, i) => {
-    const pane = existing.get(run.id) || createLivePane(run);
-    existing.delete(run.id);
-    updateLivePane(pane, run);
-    if (grid.children[i] !== pane) grid.insertBefore(pane, grid.children[i] || null);
-  });
-  existing.forEach((el) => el.remove());
-}
-
-function createLivePane(run) {
-  const pane = document.createElement("div");
-  pane.dataset.live = run.id;
-  pane.innerHTML = `
-    <div class="live-head">
-      <span class="live-emoji"></span>
-      <span class="run-agent"></span>
-      <span class="live-label"></span>
-      <span class="live-state"></span>
-      <span class="run-time" data-elapsed="${run.id}"></span>
-      <button class="link-btn live-cancel" title="Cancelar">✕</button>
-      <button class="link-btn live-open" title="Ver detalle">⤢</button>
+  card.innerHTML = `
+    <div class="row baseline between">
+      <span class="field-label">TOKENS DE CLAUDE CODE</span>
+      <span class="mono muted small">${lastAt ? formatTime(lastAt) : ""}</span>
     </div>
-    <details class="live-prompt">
-      <summary>Tarea: <span>${escapeHtml(truncate(run.prompt, 140))}</span></summary>
-      <pre class="modal-box">${escapeHtml(run.prompt)}</pre>
-    </details>
-    <div class="live-output"><div class="reasoning"></div><span class="live-text"></span><span class="cursor"></span></div>
+    <div class="usage-rows">
+      ${rows
+        .map(
+          ([label, value]) => `
+        <div class="usage-row"><span>${label}</span><span class="mono">${formatTokens(value)}</span></div>`
+        )
+        .join("")}
+    </div>
+    <div class="usage-foot">
+      <span>${ses.active} ${ses.active === 1 ? "sesión activa" : "sesiones activas"} · ${ses.today} hoy</span>
+      <span class="mono">${formatTokens(win.total)} en ${claudeUsage.days} d</span>
+    </div>
+    ${top ? `<div class="usage-foot"><span>${escapeHtml(shortModel(top.model))}</span><span class="mono">${formatTokens(top.total)}</span></div>` : ""}
   `;
-  pane.querySelector(".live-open").addEventListener("click", () => openRunModal(run.id));
-  pane.querySelector(".live-cancel").addEventListener("click", () => cancelRun(run.id));
-  return pane;
 }
 
-function updateLivePane(pane, run) {
-  const agent = agents.find((a) => a.id === run.agentId);
-  pane.className = `live-pane ${run.status}`;
-  pane.querySelector(".live-emoji").textContent = agent?.emoji || "🤖";
-  pane.querySelector(".run-agent").textContent = agent?.name || run.agentId;
-  const label = pane.querySelector(".live-label");
-  label.className = `live-label ${run.meta?.task_label ? "run-badge" : ""}`;
-  label.textContent = run.meta?.task_label || "";
-  pane.querySelector(".live-state").textContent = liveStateText(run);
-  pane.querySelector(".live-cancel").hidden = !isActive(run);
-  updateElapsed(pane.querySelector("[data-elapsed]"), run);
-
-  const out = pane.querySelector(".live-output");
-  stickToBottom(out, () => {
-    out.classList.toggle("error-text", run.status === "error");
-    out.querySelector(".reasoning").textContent = run.reasoning || "";
-    out.querySelector(".live-text").textContent =
-      run.status === "error" ? [run.response, run.error].filter(Boolean).join("\n\n") : run.response || "";
-    out.querySelector(".cursor").hidden = run.status !== "running";
-  });
+async function loadClaudeUsage() {
+  try {
+    claudeUsage = await api("/api/claude-usage");
+  } catch (_) {
+    claudeUsage = null;
+  }
+  renderClaudeUsage();
+  renderKpis();
 }
 
 // ================= Cola por modelo =================
@@ -1068,6 +1057,7 @@ function openRunModal(id) {
       ${run.tokensApprox ? `<span>~${run.tokensApprox} tokens</span>` : ""}
       <span>origen: ${escapeHtml(run.source)}</span>
       <span class="${statusClass}">${statusText}</span>
+      ${isActive(run) ? '<button class="link-btn modal-cancel" id="modalCancelBtn">Cancelar</button>' : ""}
     </div>
     <div>
       <div class="field-label">TAREA ENVIADA</div>
@@ -1086,6 +1076,8 @@ function openRunModal(id) {
       <pre class="modal-box ${run.status === "error" ? "error-text" : ""}" id="modalResponse">${escapeHtml(run.error || run.response || "—")}</pre>
     </div>
   `;
+  const cancelBtn = $("#modalCancelBtn");
+  if (cancelBtn) cancelBtn.addEventListener("click", () => cancelRun(run.id));
   if (run.status === "running") {
     $$("#modalBody .modal-box[id]").forEach((el) => (el.scrollTop = el.scrollHeight));
   }
@@ -1480,6 +1472,14 @@ function formatSeconds(ms, digits = 1) {
 function formatTime(iso) {
   return new Date(iso).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
+// Los tokens de Claude llegan a decenas de millones en un día: en "k" no se leen
+function formatTokens(n) {
+  const v = Number(n) || 0;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M`;
+  if (v >= 1000) return `${(v / 1000).toFixed(v >= 10000 ? 0 : 1)}k`;
+  return String(v);
+}
+
 function formatCount(n) {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
 }
@@ -1504,6 +1504,7 @@ async function init() {
   currentPlan = await (await fetch("/api/plan")).json();
   projects = await (await fetch("/api/projects")).json();
   sessions = await (await fetch("/api/terminals")).json();
+  await loadClaudeUsage();
 
   rebuildAgentState();
   renderAgents();
@@ -1511,7 +1512,6 @@ async function init() {
   renderPlan();
   renderTimeline();
   renderKpis();
-  renderLive();
   renderSessionUI();
 
   // Si quedó una sesión abierta (p. ej. tras recargar), volver a conectarla
@@ -1523,7 +1523,7 @@ async function init() {
   setInterval(refreshStatus, 6000);
   // La gráfica de 24 h depende de la hora, no solo de los eventos
   setInterval(renderKpis, 60000);
-  // Cronómetro de los runs en curso en la pestaña En vivo
+  // Cronómetro de los runs en curso (tarjetas de agentes y modal)
   setInterval(() => {
     runs
       .filter((r) => r.status === "running")

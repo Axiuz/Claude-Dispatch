@@ -36,7 +36,6 @@
     <nav class="tabs">
       <button class="tab-btn active" data-tab="tablero">Tablero</button>
       <button class="tab-btn" data-tab="editor">Editor</button>
-      <button class="tab-btn" data-tab="vivo">En vivo <span class="tab-count" id="liveCount"></span></button>
       <button class="tab-btn" data-tab="sesion">Sesión <span class="tab-count" id="sessionCount"></span></button>
       <button class="tab-btn" data-tab="mapa">Mapa</button>
       <button class="tab-btn" data-tab="agentes">Agentes</button>
@@ -82,13 +81,6 @@
         <span class="saved-msg push" id="edSaved"></span>
         <button class="btn" id="edReloadBtn" title="Releer la carpeta">Releer</button>
         <button class="btn primary" id="edSaveBtn">Guardar ⌘S</button>
-    <!-- ============ EN VIVO: lo que escribe cada agente ============ -->
-    <section id="tab-vivo" class="tab-panel">
-      <div class="page-head">
-        <div>
-          <div class="page-title">Agentes en vivo</div>
-          <div class="page-desc">Lo que cada agente está pensando y escribiendo, token a token. Las últimas respuestas se quedan aquí hasta que empiecen tareas nuevas.</div>
-        </div>
       </div>
 
       <div class="ed-body">
@@ -101,11 +93,7 @@
             <span class="plan-empty-text">Elige un proyecto arriba y abre un archivo del árbol. Se guarda con ⌘S, y si Claude Code lo cambia por su cuenta se recarga solo.</span>
           </div>
         </div>
-      <div class="plan-empty live-empty" id="liveEmpty">
-        <span class="plan-empty-title">Ningún agente trabajando</span>
-        <span class="plan-empty-text">Cuando Claude Code delegue una tarea (o la pruebes desde Consola), verás aquí la respuesta mientras se escribe.</span>
       </div>
-      <div class="live-grid" id="liveGrid"></div>
     </section>
 
     <!-- ============ SESIÓN (terminal del proyecto) ============ -->
@@ -280,6 +268,9 @@
 
     <span class="eyebrow spaced">RESUMEN</span>
     <div class="kpi-grid" id="kpiGrid"></div>
+
+    <!-- Gasto real de Claude Code, leído de sus propios transcripts -->
+    <div class="usage-card" id="usageCard"></div>
 
     <div class="spark-card">
       <div class="row baseline between">
