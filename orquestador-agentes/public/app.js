@@ -16,6 +16,7 @@ const agentState = {}; // id -> {status, taskLabel, lastDuration, count}
 // dock. Cada una con su sesión en el servidor y su instancia de xterm; cuál ve
 // cada una lo guarda la vista (sessionTerm.sessionId, dockTerm.sessionId).
 let dockCwd = null; // carpeta a la que apunta el dock; sigue a la sesión activa
+let dockTab = "terminal"; // cuál de las dos vistas del dock se ve: terminal o notas
 let consoleAgentId = null;
 let selectedParallel = 1;
 // Cuántas delegaciones corren y cuántas esperan turno, según el servidor
@@ -357,6 +358,7 @@ function connectStream() {
     projects = JSON.parse(e.data);
     renderProjects();
     if (!gitInfo) loadGit();
+    if (notesPath !== notesTarget()) loadNotes();
     if (currentPlan) renderPlan();
     renderSessionUI();
   });
@@ -373,6 +375,12 @@ function connectStream() {
   es.addEventListener("git:plan", (e) => {
     const { root } = JSON.parse(e.data);
     if (gitInfo && gitInfo.root === root) loadGitPlan();
+  });
+
+  // Las notas pueden cambiar desde otra ventana del panel
+  es.addEventListener("notes:update", (e) => {
+    const { path } = JSON.parse(e.data);
+    if (path === notesTarget()) loadNotes();
   });
 
   es.addEventListener("terminals:updated", (e) => {
@@ -592,8 +600,8 @@ function setDockHeight(px) {
 
 function setDockOpen(open) {
   $("#terminalDock").classList.toggle("collapsed", !open);
-  $("#dockHead").setAttribute("aria-expanded", open ? "true" : "false");
-  $("#dockHead").title = open ? "Plegar" : "Desplegar";
+  $("#dockCollapseBtn").setAttribute("aria-expanded", open ? "true" : "false");
+  $("#dockCollapseBtn").title = open ? "Plegar" : "Desplegar";
   localStorage.setItem(DOCK_OPEN_KEY, open ? "1" : "0");
   if (open) requestAnimationFrame(() => dockTerm.fit());
 }
@@ -603,15 +611,17 @@ const toggleDock = () => setDockOpen($("#terminalDock").classList.contains("coll
 setDockHeight(Number(localStorage.getItem(DOCK_HEIGHT_KEY)) || 300);
 setDockOpen(localStorage.getItem(DOCK_OPEN_KEY) !== "0");
 
-$("#dockHead").addEventListener("click", toggleDock);
-$("#dockHead").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" || e.key === " ") {
-    e.preventDefault();
-    toggleDock();
-  }
+$("#dockCollapseBtn").addEventListener("click", toggleDock);
+// Clic en la pestaña que ya está activa: pliega, como la cabecera entera antes
+$$(".dock-tab").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const collapsed = $("#terminalDock").classList.contains("collapsed");
+    if (btn.dataset.dock === dockTab && !collapsed) return setDockOpen(false);
+    if (collapsed) setDockOpen(true);
+    setDockTab(btn.dataset.dock, { focus: true });
+  });
 });
-$("#dockOpenBtn").addEventListener("click", (e) => {
-  e.stopPropagation(); // el botón vive dentro del dock, no debe plegarlo
+$("#dockOpenBtn").addEventListener("click", () => {
   if (dockCwd) openDockShell();
   else pickFolder();
 });
@@ -848,6 +858,7 @@ function followDock(cwd) {
   if (changed) {
     gitInfo = null;
     loadGit({ refresh: true });
+    loadNotes();
   }
   const shell = sessions.find((s) => s.kind === "shell" && s.cwd === cwd && !s.exited);
   if (shell) dockTerm.attach(shell.id);
@@ -871,17 +882,183 @@ async function openDockShell() {
 function renderDock() {
   const active = sessionById(dockTerm.sessionId);
   const project = dockCwd ? projects.find((p) => p.path === dockCwd) : null;
-  $("#dockEmpty").hidden = !!active;
-  $("#dockTerminalHost").hidden = !active;
+  const onTerminal = dockTab === "terminal";
+  $("#dockEmpty").hidden = !onTerminal || !!active;
+  $("#dockTerminalHost").hidden = !onTerminal || !active;
   $("#dockEmptyText").textContent = dockCwd
     ? `Sin shell en ${project?.name || tildePath(dockCwd)}.`
     : "Sin carpeta abierta.";
   $("#dockOpenBtn").textContent = dockCwd ? "Abrir shell" : "Abrir un proyecto";
   const state = $("#dockState");
+  if (!onTerminal) {
+    const dir = notesTarget();
+    const owner = dir ? projects.find((p) => p.path === dir) : null;
+    state.textContent = dir ? owner?.name || tildePath(dir) : "";
+    state.classList.add("off");
+    return;
+  }
   if (!active) state.textContent = "";
   else state.textContent = active.exited ? `${active.name} · terminada` : active.name;
   state.classList.toggle("off", !active || active.exited);
 }
+
+// ================= Notas y to-dos del dock =================
+// Viven en el orquestador, no dentro del repo: son del usuario y no deben
+// acabar en un commit suyo. Siguen a la misma carpeta que la tarjeta de Git.
+const DOCK_TAB_KEY = "dispatch.dockTab";
+let notes = [];
+let notesPath = null;
+let notesEditing = null;
+
+const notesTarget = () => dockCwd || projects.find((p) => p.exists)?.path || null;
+
+// Cambia entre las dos vistas del dock. La terminal se vuelve a medir al
+// mostrarse, porque xterm no puede medir un contenedor oculto.
+function setDockTab(tab, { focus = false } = {}) {
+  dockTab = tab === "notas" ? "notas" : "terminal";
+  localStorage.setItem(DOCK_TAB_KEY, dockTab);
+  $$(".dock-tab").forEach((b) => {
+    const on = b.dataset.dock === dockTab;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  $("#notesPane").hidden = dockTab !== "notas";
+  renderDock();
+  if (dockTab === "terminal") requestAnimationFrame(() => dockTerm.fit());
+  else {
+    if (notesPath !== notesTarget()) loadNotes();
+    if (focus) $("#notesInput").focus();
+  }
+}
+
+// Se comprueba la carpeta otra vez al volver la respuesta: el usuario puede
+// haber cambiado de proyecto mientras el fetch iba de camino.
+async function loadNotes() {
+  const dir = notesTarget();
+  notesPath = dir;
+  notesEditing = null;
+  if (!dir) {
+    notes = [];
+    return renderNotes();
+  }
+  try {
+    const data = await api(`/api/notes?path=${encodeURIComponent(dir)}`);
+    if (notesPath !== dir) return;
+    notes = data.items || [];
+  } catch (_) {
+    notes = [];
+  }
+  renderNotes();
+}
+
+// Alta, edición y borrado pasan por aquí: la respuesta ya trae la lista entera,
+// así que no hace falta volver a pedirla.
+async function notesWrite(url, body, method) {
+  const dir = notesTarget();
+  if (!dir) return;
+  try {
+    const data = await api(url, { path: dir, ...body }, method);
+    if (notesPath !== data.path) return;
+    notes = data.items || [];
+    notesEditing = null;
+    renderNotes();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+// No repinta mientras hay una nota abierta para editar, que se llevaría por
+// delante lo que se está escribiendo; el contador de la pestaña sí se actualiza.
+function renderNotes() {
+  const pending = notes.filter((n) => !n.done).length;
+  $("#notesCount").textContent = pending ? String(pending) : "";
+  if (notesEditing) return;
+
+  const list = $("#notesList");
+  const foot = $("#notesFoot");
+  if (!notesPath) {
+    list.innerHTML = '<div class="notes-empty">Abre un proyecto para tener notas suyas.</div>';
+    foot.innerHTML = "";
+    return;
+  }
+  if (!notes.length) {
+    list.innerHTML = '<div class="notes-empty">Sin notas en esta carpeta.<br />Escribe arriba y pulsa Enter.</div>';
+    foot.innerHTML = "";
+    return;
+  }
+
+  list.innerHTML = notes
+    .map(
+      (n) => `
+      <div class="note ${n.done ? "done" : ""}" data-id="${escapeAttr(n.id)}">
+        <input type="checkbox" ${n.done ? "checked" : ""} title="${n.done ? "Desmarcar" : "Marcar como hecha"}" />
+        <div class="note-text" title="Clic para editar">${escapeHtml(n.text)}</div>
+        <button class="link-btn tiny note-del" title="Borrar">✕</button>
+      </div>`
+    )
+    .join("");
+
+  const done = notes.length - pending;
+  foot.innerHTML =
+    `<span>${pending} pendiente${pending === 1 ? "" : "s"}</span>` +
+    (done ? `<button class="link-btn tiny push" id="notesClearBtn">Limpiar ${done} hecha${done === 1 ? "" : "s"}</button>` : "");
+}
+
+// Editar en el sitio: el texto se cambia por un textarea. Enter guarda, Escape
+// deja la nota como estaba y Shift+Enter parte la línea.
+function startNoteEdit(row, id) {
+  const note = notes.find((n) => n.id === id);
+  if (!note || notesEditing) return;
+  notesEditing = id;
+
+  const box = document.createElement("textarea");
+  box.className = "note-edit";
+  box.value = note.text;
+  box.rows = Math.min(6, note.text.split("\n").length + 1);
+  row.querySelector(".note-text").replaceWith(box);
+  box.focus();
+  box.setSelectionRange(box.value.length, box.value.length);
+
+  const close = (save) => {
+    if (notesEditing !== id) return;
+    notesEditing = null;
+    const text = box.value.trim();
+    if (save && text && text !== note.text) notesWrite("/api/notes/item", { id, text });
+    else renderNotes();
+  };
+  box.addEventListener("blur", () => close(true));
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close(false);
+    } else if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      close(true);
+    }
+  });
+}
+
+$("#notesForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const input = $("#notesInput");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  notesWrite("/api/notes", { text });
+});
+
+$("#notesList").addEventListener("click", (e) => {
+  const row = e.target.closest(".note");
+  if (!row) return;
+  const id = row.dataset.id;
+  if (e.target.matches(".note-del")) notesWrite("/api/notes", { id }, "DELETE");
+  else if (e.target.matches('input[type="checkbox"]')) notesWrite("/api/notes/item", { id, done: e.target.checked });
+  else if (e.target.matches(".note-text")) startNoteEdit(row, id);
+});
+
+$("#notesFoot").addEventListener("click", (e) => {
+  if (e.target.id === "notesClearBtn") notesWrite("/api/notes", { done: true }, "DELETE");
+});
 
 function renderSessionUI() {
   const live = sessions.filter((s) => !s.exited);
@@ -2553,6 +2730,8 @@ async function init() {
   // la única forma de enterarse es volver a preguntar
   renderGit();
   loadGit();
+  loadNotes();
+  setDockTab(localStorage.getItem(DOCK_TAB_KEY) || "terminal");
   setInterval(() => {
     if (!document.hidden) loadGit();
   }, GIT_POLL_MS);

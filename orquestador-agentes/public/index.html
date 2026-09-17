@@ -295,16 +295,34 @@
     <!-- Shell pelada para comandos sueltos, independiente de la sesión de Claude
          Code de la pestaña Sesión. La cabecera entera pliega el dock. -->
     <div class="dock" id="terminalDock">
-      <div class="rail-head dock-head" id="dockHead" role="button" tabindex="0"
-           aria-expanded="true" title="Plegar o desplegar">
-        <span class="eyebrow">TERMINAL</span>
+      <div class="rail-head dock-head" id="dockHead">
+        <div class="dock-tabs" role="tablist">
+          <button class="dock-tab active" id="dockTabTerminal" data-dock="terminal" role="tab"
+                  aria-selected="true" title="Terminal de la carpeta activa">TERMINAL</button>
+          <button class="dock-tab" id="dockTabNotes" data-dock="notas" role="tab"
+                  aria-selected="false" title="Notas y to-dos de la carpeta activa">
+            NOTAS <span class="dock-tab-count" id="notesCount"></span>
+          </button>
+        </div>
         <span class="dock-state mono small" id="dockState"></span>
+        <button class="dock-collapse" id="dockCollapseBtn" aria-expanded="true"
+                title="Plegar o desplegar">⌄</button>
       </div>
       <div class="dock-body" id="dockBody">
         <div class="terminal-host" id="dockTerminalHost"></div>
         <div class="dock-empty" id="dockEmpty">
           <span id="dockEmptyText">Sin carpeta abierta.</span>
           <button class="link-btn" id="dockOpenBtn">Abrir un proyecto</button>
+        </div>
+
+        <div class="notes-pane" id="notesPane" hidden>
+          <form class="notes-new" id="notesForm">
+            <input id="notesInput" type="text" maxlength="4000" autocomplete="off"
+                   placeholder="Nota o to-do…" />
+            <button class="btn" type="submit" title="Añadir">+</button>
+          </form>
+          <div class="notes-list" id="notesList"></div>
+          <div class="notes-foot" id="notesFoot"></div>
         </div>
       </div>
       <div class="dock-grip" id="dockGrip" title="Arrastra para cambiar el alto"></div>
