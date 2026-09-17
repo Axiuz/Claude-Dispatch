@@ -1,4 +1,4 @@
-# Dispatch
+# Singularity
 
 Panel local para ver y controlar cómo Claude Code delega trabajo a modelos de IA
 que corren en tu Mac (LM Studio). Incluye una app nativa de macOS que arranca todo
@@ -64,18 +64,18 @@ cd orquestador-agentes && pnpm install && cd ..
 bash Scripts/build-dmg.sh
 ```
 
-Genera `dist/Claude-Dispatch-<versión>.dmg`. Arrastra la app a Aplicaciones y
+Genera `dist/Singularity-<versión>.dmg`. Arrastra la app a Aplicaciones y
 ábrela. Al arrancar:
 
 1. `launcher.sh` levanta el servidor de LM Studio con `--bind 127.0.0.1` y carga
    el modelo en segundo plano.
 2. Arranca el orquestador con los datos en
-   `~/Library/Application Support/Dispatch` (sobreviven a reinstalar).
+   `~/Library/Application Support/Singularity` (sobreviven a reinstalar).
 3. La ventana nativa carga el panel. Al cerrar la app se detiene el orquestador
-   y también LM Studio (`lms unload --all` y `lms server stop`): cerrar Dispatch
+   y también LM Studio (`lms unload --all` y `lms server stop`): cerrar Singularity
    deja la RAM libre.
 
-Logs en `~/Library/Logs/Dispatch/`.
+Logs en `~/Library/Logs/Singularity/`.
 
 La firma es ad-hoc: la primera vez macOS puede pedir abrirla con clic derecho >
 Abrir.
@@ -449,7 +449,7 @@ repegar el plan por una viñeta de más no tiene sentido. Lo que no se negocia s
 las rutas: van a `git add`, así que se filtran igual que las del resto del panel.
 
 Se guarda uno por repositorio en `data/commitplans.json`, ignorado por git porque
-lleva rutas reales y trabajo sin commitear. Dispatch nunca commitea solo:
+lleva rutas reales y trabajo sin commitear. Singularity nunca commitea solo:
 cada commit es un clic tuyo.
 
 ---
@@ -488,7 +488,7 @@ orquestador-agentes/          raíz del repo
                               plan de commits (pnpm test)
     dev/mock-lmstudio.js      simulador de LM Studio
   macos/
-    Dispatch.swift            ventana nativa (WKWebView), portapapeles y selector de carpeta
+    Singularity.swift         ventana nativa (WKWebView), portapapeles y selector de carpeta
     launcher.sh               arranca/detiene LM Studio y el orquestador
     make-icon.swift, logo.jpg icono de la app
   Scripts/build-dmg.sh        compila la app y genera el .dmg
