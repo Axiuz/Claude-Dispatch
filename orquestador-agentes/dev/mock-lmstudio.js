@@ -10,7 +10,7 @@ const http = require("http");
 const PORT = parseInt(process.env.MOCK_PORT, 10) || 1234;
 // Los mismos dos que corren en LM Studio: uno por par de agentes. Así se puede
 // probar la cola por modelo sin cargar nada.
-const MODELS = ["qwen/qwen3-4b-2507", "google/gemma-3-4b"];
+const MODELS = ["qwen/qwen3-4b-2507"];
 
 function streamReply(res, text, thinking = "", everyMs = 40) {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });

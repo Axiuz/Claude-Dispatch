@@ -9,7 +9,7 @@
 //
 //   node dev/bench-modelos.js --list
 //   node dev/bench-modelos.js --model qwen/qwen3-4b-2507 --label "Qwen3 4B" --no-think
-//   node dev/bench-modelos.js --model google/gemma-3-4b --label "Gemma 3 4B"
+//   node dev/bench-modelos.js --model qwen/qwen3-8b --label "Qwen3 8B"
 //   node dev/bench-modelos.js --compare
 //
 // Cada corrida deja un JSON en bench-resultados/. --compare los lee todos y
