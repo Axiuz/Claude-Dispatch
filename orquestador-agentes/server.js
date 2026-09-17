@@ -6,6 +6,7 @@ const crypto = require("crypto");
 const pty = require("node-pty");
 const { buildGraph } = require("./codegraph");
 const { COLUMNS, COLUMN_AFTER_RUN, columnFor, placeStep } = require("./kanban");
+const safepath = require("./safepath");
 
 const DEFAULT_DATA_DIR = path.join(__dirname, "data");
 // La app de macOS pasa ORQ_DATA_DIR para guardar los datos fuera del bundle
@@ -134,11 +135,7 @@ function setStepColumn(stepId, column, extra = {}) {
 const MAX_PROJECTS = 30;
 let projects = fs.existsSync(PROJECTS_PATH) ? loadJSON(PROJECTS_PATH) : [];
 
-function resolveDir(p) {
-  if (typeof p !== "string" || !p.trim()) return null;
-  const expanded = p.trim().replace(/^~(?=$|\/)/, os.homedir());
-  return path.resolve(expanded);
-}
+const resolveDir = safepath.expandPath;
 
 function isDirectory(p) {
   try {
@@ -564,10 +561,20 @@ if (process.env.ORQ_APP_ONLY) {
 }
 app.use(express.static(path.join(__dirname, "public")));
 // xterm.js se sirve tal cual desde node_modules: sin build step
-const pkgDir = (name) => path.dirname(require.resolve(`${name}/package.json`));
+// Algunos paquetes (monaco) no exponen su package.json en el campo "exports",
+// así que si require.resolve falla se cae a la carpeta de node_modules de al lado.
+const pkgDir = (name) => {
+  try {
+    return path.dirname(require.resolve(`${name}/package.json`));
+  } catch (_) {
+    return path.join(__dirname, "node_modules", name);
+  }
+};
 app.use("/vendor/xterm", express.static(path.join(pkgDir("@xterm/xterm"), "lib")));
 app.use("/vendor/xterm", express.static(path.join(pkgDir("@xterm/xterm"), "css")));
 app.use("/vendor/xterm", express.static(path.join(pkgDir("@xterm/addon-fit"), "lib")));
+// Monaco (el editor de VS Code) igual: su build AMD se carga tal cual desde disco
+app.use("/vendor/monaco", express.static(path.join(pkgDir("monaco-editor"), "min/vs")));
 
 // ---- SSE: el panel se suscribe aquí para ver todo en vivo ----
 app.get("/api/stream", (req, res) => {
@@ -1113,6 +1120,84 @@ app.get("/api/graph", (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---- Archivos (pestaña Editor) ----
+// Solo se ve y se escribe dentro de las carpetas que ya están en Proyectos:
+// la contención la resuelve safepath.js, aquí solo se traduce a códigos HTTP.
+const FORBIDDEN = { error: "Esa ruta no está dentro de ningún proyecto abierto" };
+const projectRoots = () => projects.map((p) => p.path);
+const insideProject = (p, opts) => safepath.resolveInsideRoots(p, projectRoots(), opts);
+
+app.get("/api/files/tree", (req, res) => {
+  const dir = insideProject(req.query.path);
+  if (!dir || !isDirectory(dir)) return res.status(403).json(FORBIDDEN);
+  try {
+    const entries = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.name !== ".DS_Store" && !safepath.SKIP_DIRS.has(e.name))
+      .map((e) => ({ name: e.name, path: path.join(dir, e.name), dir: e.isDirectory() }))
+      // Carpetas primero, y dentro de cada grupo por nombre, como en un editor
+      .sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name, "es") : a.dir ? -1 : 1));
+    res.json({ path: dir, entries });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/files/read", (req, res) => {
+  const file = insideProject(req.query.path);
+  if (!file) return res.status(403).json(FORBIDDEN);
+
+  let st;
+  try {
+    st = fs.statSync(file);
+  } catch (_) {
+    return res.status(404).json({ error: "El archivo no existe" });
+  }
+  if (!st.isFile()) return res.status(400).json({ error: "No es un archivo" });
+  if (st.size > safepath.MAX_FILE_BYTES) {
+    return res.status(413).json({ error: "El archivo pasa de 2 MB: ábrelo en tu editor de siempre" });
+  }
+
+  const buf = fs.readFileSync(file);
+  if (safepath.looksBinary(buf)) return res.status(415).json({ error: "Es un archivo binario" });
+  res.json({ path: file, content: buf.toString("utf-8"), size: st.size, mtimeMs: st.mtimeMs });
+});
+
+app.post("/api/files/write", (req, res) => {
+  const file = insideProject(req.body.path);
+  if (!file) return res.status(403).json(FORBIDDEN);
+  if (typeof req.body.content !== "string") return res.status(400).json({ error: "Falta 'content'" });
+  if (Buffer.byteLength(req.body.content) > safepath.MAX_FILE_BYTES) {
+    return res.status(413).json({ error: "El contenido pasa de 2 MB" });
+  }
+  if (isDirectory(file)) return res.status(400).json({ error: "Esa ruta es una carpeta" });
+
+  try {
+    fs.writeFileSync(file, req.body.content, "utf-8");
+    const st = fs.statSync(file);
+    res.json({ ok: true, path: file, size: st.size, mtimeMs: st.mtimeMs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fechas de modificación de los archivos abiertos: así el editor se entera de
+// que Claude Code acaba de tocar uno y lo recarga.
+app.post("/api/files/stat", (req, res) => {
+  const paths = Array.isArray(req.body.paths) ? req.body.paths.slice(0, 50) : [];
+  res.json(
+    paths.map((p) => {
+      const file = insideProject(p);
+      if (!file) return { path: p, missing: true };
+      try {
+        return { path: p, mtimeMs: fs.statSync(file).mtimeMs };
+      } catch (_) {
+        return { path: p, missing: true };
+      }
+    })
+  );
 });
 
 // ---- Terminal ----
