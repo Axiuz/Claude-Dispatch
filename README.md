@@ -252,6 +252,8 @@ no existe se marca como "Suprimido".
 | Agentes | `data/agents.json` |
 | Configuración | `data/config.json` |
 | Proyectos recientes | `data/projects.json` (ignorado por git) |
+| Plan de commits | `data/commitplans.json` (ignorado por git) |
+| Notas y to-dos | `data/notes.json` (ignorado por git) |
 | Runs, plan, sesiones de terminal | solo en memoria: se pierden al reiniciar |
 
 ---
@@ -336,6 +338,11 @@ GET    /api/git/plan?path=         plan de commits del repositorio
 POST   /api/git/plan               {path, text} o {path, commits: []}
 DELETE /api/git/plan               {path, index?} — un commit o el plan entero
 
+GET    /api/notes?path=            notas y to-dos de una carpeta
+POST   /api/notes                  {path, text} — añade una nota
+POST   /api/notes/item             {path, id, text?, done?} — edita o marca
+DELETE /api/notes                  {path, id} una nota | {path, done: true} las hechas
+
 GET    /api/terminals
 POST   /api/terminals              {path, kind, cols, rows} — kind: claude | shell
 GET    /api/terminals/:id/stream   SSE: buffer, data, exit
@@ -402,6 +409,27 @@ cuando la pides.
 El dock sigue siempre a la carpeta de la sesión activa. Cada carpeta puede tener
 una de cada tipo, las dos siguen vivas en el servidor aunque cambies de proyecto,
 y al volver se reproduce el scrollback.
+
+### Notas y to-dos
+
+El dock tiene dos pestañas, **TERMINAL** y **NOTAS**, y se cambian como las de
+Chrome: las dos comparten la misma caja y el mismo alto, y la shell sigue viva
+mientras miras las notas. Al lado del nombre de la pestaña va el número de
+pendientes.
+
+Se escriben en el campo de arriba y se añaden con Enter. Cada nota se marca como
+hecha con su casilla, se edita haciendo clic en su texto —Enter guarda, Escape
+cancela— y se borra con la ✕. Abajo, el contador de pendientes y un botón para
+limpiar las hechas de una vez.
+
+Las notas se guardan en `data/notes.json` del orquestador, **no dentro de tu
+repositorio**: son tuyas, no del proyecto, y así no acaban en un commit ni te
+obligan a mantener una línea en su `.gitignore`. Sobreviven al reinicio del
+servidor.
+
+Están indexadas por carpeta y siguen a la misma que la tarjeta de Control de
+código: cambiar de proyecto cambia la lista. El tope es de 200 notas por
+proyecto y 4000 caracteres por nota.
 
 ---
 
@@ -479,11 +507,12 @@ orquestador-agentes/          raíz del repo
     kanban.js                 columnas del tablero y colocación de tarjetas
     git.js                    estado y operaciones de Git de una carpeta
     commitplan.js             parser del plan de commits del documenter
+    notes.js                  notas y to-dos de cada proyecto: normalizador y topes
     claudeusage.js            tokens que gasta Claude Code, leídos de sus transcripts
     safepath.js               contención de rutas del editor
     public/                   panel: index.html, styles.css, app.js, graph.js, editor.js
     data/                     agents.json, config.json (y plan.json, projects.json,
-                              commitplans.json, los tres ignorados por git)
+                              commitplans.json, notes.json, ignorados por git)
     test/                     tests del escáner, el tablero, las rutas, Git y el
                               plan de commits (pnpm test)
     dev/mock-lmstudio.js      simulador de LM Studio
@@ -509,6 +538,8 @@ orquestador-agentes/          raíz del repo
   se guarda en `data/plan.json`.
 - El editor abre, edita y guarda, pero no crea ni borra archivos, y no muestra
   el estado de Git.
+- Las notas son texto plano y sin orden propio: no hay carpetas, etiquetas,
+  fechas de vencimiento ni arrastrar para reordenar. La nueva va arriba.
 - La tarjeta de Git cambia de rama, prepara archivos y commitea, pero no enseña
   diffs ni resuelve conflictos: un merge con conflictos, un rebase, un stash o un
   push forzado se siguen haciendo en la terminal.
