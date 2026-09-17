@@ -11,6 +11,7 @@ const safepath = require("./safepath");
 const claudeusage = require("./claudeusage");
 const gitinfo = require("./git");
 const commitplan = require("./commitplan");
+const notesstore = require("./notes");
 const debugsuite = require("./debug");
 
 const DEFAULT_DATA_DIR = path.join(__dirname, "data");
@@ -34,6 +35,9 @@ const PLAN_PATH = path.join(DATA_DIR, "plan.json");
 // Planes de commits, uno por raíz de repositorio. Tampoco se siembra: lleva
 // rutas reales y el trabajo sin commitear del usuario.
 const COMMIT_PLANS_PATH = path.join(DATA_DIR, "commitplans.json");
+// Notas y to-dos, uno por carpeta de proyecto. Tampoco se siembra: es trabajo
+// del usuario y lleva rutas reales.
+const NOTES_PATH = path.join(DATA_DIR, "notes.json");
 
 const loadJSON = (p) => JSON.parse(fs.readFileSync(p, "utf-8"));
 const saveJSON = (p, o) => fs.writeFileSync(p, JSON.stringify(o, null, 2));
@@ -53,6 +57,14 @@ let currentPlan = fs.existsSync(PLAN_PATH) ? loadJSON(PLAN_PATH) : null;
 // commitPlans: el plan de commits de cada repositorio, indexado por su raíz.
 // Va a disco como el tablero, y por la misma razón: es trabajo del usuario.
 let commitPlans = fs.existsSync(COMMIT_PLANS_PATH) ? loadJSON(COMMIT_PLANS_PATH).plans || {} : {};
+// notes: las notas y to-dos de cada proyecto, indexados por su carpeta. Van a
+// disco por lo mismo que el tablero: son del usuario, no del orquestador.
+let notes = fs.existsSync(NOTES_PATH) ? loadJSON(NOTES_PATH).notes || {} : {};
+for (const [dir, entry] of Object.entries(notes)) {
+  const items = notesstore.normalizeItems(entry && entry.items);
+  if (items.length) notes[dir] = { items, updatedAt: entry.updatedAt || null };
+  else delete notes[dir];
+}
 // clientes SSE conectados (el panel)
 let sseClients = [];
 
@@ -1661,6 +1673,100 @@ app.delete("/api/git/plan", (req, res) => {
   saveCommitPlans();
   broadcast("git:plan", { root });
   res.json(commitPlanView(root));
+});
+
+// ---- Notas y to-dos ----
+// Una lista por carpeta de proyecto, guardada aquí y no dentro del repo del
+// usuario: son suyas, no del proyecto, y no deben acabar en un commit. Una nota
+// es un to-do sin marcar, así que hay un solo tipo de ficha.
+function saveNotes() {
+  try {
+    saveJSON(NOTES_PATH, { notes });
+  } catch (err) {
+    console.error("No se pudieron guardar las notas:", err.message);
+  }
+}
+
+// La carpeta abierta manda, no la raíz del repo: las notas son del proyecto que
+// se tiene delante, que puede ser una subcarpeta.
+// La carpeta sale del cuerpo o de la query, y pasa por el mismo filtro que el
+// editor y que Git: 403 si no está en Proyectos.
+function notesDirOf(req, res) {
+  const raw = req.body && req.body.path !== undefined ? req.body.path : req.query.path;
+  const dir = insideProject(raw, { allowSkipped: true });
+  if (!dir || !isDirectory(dir)) {
+    res.status(403).json(FORBIDDEN);
+    return null;
+  }
+  return dir;
+}
+
+const notesView = (dir) => ({
+  path: dir,
+  items: notes[dir]?.items || [],
+  updatedAt: notes[dir]?.updatedAt || null,
+});
+
+// Toda escritura acaba aquí: guarda, avisa al panel por SSE y responde con la
+// lista ya releída. Una carpeta que se queda sin notas se borra del archivo.
+function writeNotes(dir, items, res) {
+  const now = new Date().toISOString();
+  if (!items.length) delete notes[dir];
+  else notes[dir] = { items, updatedAt: now };
+  notesstore.pruneProjects(notes);
+  saveNotes();
+  broadcast("notes:update", { path: dir });
+  res.json(notesView(dir));
+}
+
+app.get("/api/notes", (req, res) => {
+  const dir = notesDirOf(req, res);
+  if (!dir) return;
+  res.json(notesView(dir));
+});
+
+// La nota nueva va primero: es la que se acaba de escribir y la que se quiere ver.
+app.post("/api/notes", (req, res) => {
+  const dir = notesDirOf(req, res);
+  if (!dir) return;
+  const item = notesstore.makeItem(req.body && req.body.text);
+  if (!item) return res.status(400).json({ error: "La nota está vacía" });
+
+  const items = notes[dir]?.items || [];
+  if (items.length >= notesstore.MAX_ITEMS) {
+    return res.status(400).json({ error: `Máximo ${notesstore.MAX_ITEMS} notas por proyecto` });
+  }
+  writeNotes(dir, [item, ...items], res);
+});
+
+// Edita el texto o marca la nota como hecha; con 'id' desconocido, 404.
+app.post("/api/notes/item", (req, res) => {
+  const dir = notesDirOf(req, res);
+  if (!dir) return;
+  const { id, text, done } = req.body || {};
+  const items = notes[dir]?.items || [];
+  const at = items.findIndex((i) => i.id === id);
+  if (at < 0) return res.status(404).json({ error: "Esa nota ya no existe" });
+  if (text === undefined && done === undefined) return res.status(400).json({ error: "Falta 'text' o 'done'" });
+
+  const updated = notesstore.applyUpdate(items[at], { text, done });
+  if (!updated) return res.status(400).json({ error: "La nota está vacía" });
+  const next = items.slice();
+  next[at] = updated;
+  writeNotes(dir, next, res);
+});
+
+// Con 'id' se borra una nota; con 'done' se limpian todas las marcadas.
+app.delete("/api/notes", (req, res) => {
+  const dir = notesDirOf(req, res);
+  if (!dir) return;
+  const items = notes[dir]?.items || [];
+  const { id, done } = req.body || {};
+  if (id === undefined && done !== true) return res.status(400).json({ error: "Falta 'id' o 'done'" });
+
+  const next = done === true ? items.filter((i) => !i.done) : items.filter((i) => i.id !== id);
+  if (next.length === items.length) return res.json(notesView(dir));
+  writeNotes(dir, next, res);
 });
 
 // ---- Terminal ----
