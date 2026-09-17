@@ -62,7 +62,7 @@ install -m 755 "$ROOT/macos/launcher.sh" "$RES/launcher.sh"
 echo "→ Copiando el servidor y sus dependencias"
 mkdir -p "$RES/app"
 # pnpm-workspace.yaml autoriza el postinstall de node-pty (la terminal del panel)
-cp -R "$SRC/server.js" "$SRC/package.json" "$SRC/pnpm-lock.yaml" "$SRC/pnpm-workspace.yaml" "$SRC/public" "$RES/app/"
+cp -R "$SRC/server.js" "$SRC/codegraph.js" "$SRC/package.json" "$SRC/pnpm-lock.yaml" "$SRC/pnpm-workspace.yaml" "$SRC/public" "$RES/app/"
 # Solo los valores por defecto: projects.json lleva rutas reales y no viaja en la app
 mkdir -p "$RES/app/data"
 cp "$SRC/data/agents.json" "$SRC/data/config.json" "$RES/app/data/"
