@@ -36,7 +36,7 @@ curl -s -X POST http://localhost:3131/api/plan \
       {"description": "Generar la función Y", "agent": "coder"},
       {"description": "Tests de Y", "agent": "tester"},
       {"description": "Integrar en el archivo", "agent": null},
-      {"description": "Revisar el diff", "agent": "reviewer"}
+      {"description": "Revisar el diff", "agent": null}
     ]
   }'
 ```
@@ -69,8 +69,10 @@ curl -s -X POST http://localhost:3131/agent/coder \
 El `step_id` hace que el paso se marque solo en mi panel cuando el agente termine.
 
 **Pasos independientes entre sí** — mándalos juntos en un lote (hasta 12). No los
-repartas tú: el orquestador ejecuta `max_parallel` a la vez y encola el resto,
-porque más peticiones simultáneas a LM Studio no van más rápido.
+repartas tú: cada agente corre en el modelo que tiene asignado y hay **una cola
+por modelo**, de `max_parallel` a la vez. Dos agentes de modelos distintos corren
+en paralelo de verdad; dos del mismo modelo se encolan, porque mandarle varias
+peticiones juntas al mismo modelo no las acelera.
 ```bash
 curl -s -X POST http://localhost:3131/delegate \
   -H "Content-Type: application/json" \
@@ -84,7 +86,7 @@ curl -s -X POST http://localhost:3131/delegate \
 
 Después de cada respuesta de un agente:
 
-- **Revísala antes de usarla.** Los agentes locales corren un modelo de 9B: se
+- **Revísala antes de usarla.** Los agentes locales corren modelos de 4B: se
   equivocan más que tú. Si la respuesta está mal, corrígela tú mismo. No reenvíes
   la misma tarea al agente una y otra vez.
 - Si la respuesta es inservible, marca el paso como error, hazlo tú, y dímelo.
@@ -146,8 +148,8 @@ El agente **coder** es tu refuerzo solo cuando hay demasiado código que escribi
 
 - **tester:** si escribiste o cambiaste lógica, pídele los tests unitarios de esa
   lógica. Revísalos y ajústalos tú antes de integrarlos.
-- **reviewer:** antes de dar la tarea por terminada, mándale el diff (o las partes
-  clave si es muy grande). Valora sus observaciones; no todas serán correctas.
+- **revisión:** la haces tú, que sí ves el repo completo. El agente reviewer está
+  desactivado; repasa tu propio diff antes de dar la tarea por terminada.
 - **documenter:** si hay que documentar, tú escribes el resumen de hechos (qué se
   hizo, por qué, archivos, API) y él redacta. Tú revisas e integras.
 - **explainer:** opcional, para resumir código ajeno cuando necesites orientarte.
@@ -166,9 +168,9 @@ material es grande, pártelo en trozos de ~300 líneas o pásale tu resumen.
 Nunca delegues decisiones de arquitectura ni la implementación de seguridad,
 auth o credenciales (sí puedes pedir revisión).
 
-Las sesiones abiertas desde el panel de Claude Dispatch ya reciben estas
-instrucciones (generadas por `buildInstructions()` en `server.js`); este archivo
-es para proyectos donde abras Claude Code por fuera del panel.
+La terminal del panel de Claude Dispatch es una shell normal: si abres Claude
+Code ahí dentro, necesita estas instrucciones igual que en cualquier otro sitio.
+Cópialas de la pestaña **Conexión** al `CLAUDE.md` del proyecto.
 
 ## Antes de empezar
 

@@ -1,6 +1,6 @@
 {
   "name": "orquestador-agentes",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Orquestador y panel de control de agentes de IA locales, invocables por Claude Code",
   "main": "server.js",
   "scripts": {

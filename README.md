@@ -21,12 +21,20 @@ necesitan y revisa lo que devuelven antes de usarlo.
 
 - **Rutea delegaciones.** Claude Code llama a `POST /agent/{id}` y el orquestador
   manda la petición a LM Studio con el system prompt de ese agente.
-- **Muestra todo en vivo.** Cada delegación es un *run*: su prompt, el
-  razonamiento del modelo (si lo emite) y la respuesta aparecen token a token.
+- **Muestra todo en vivo.** Cada delegación es un *run*: su tarjeta de agente
+  marca el estado y, al abrirla, el prompt, el razonamiento del modelo (si lo
+  emite) y la respuesta aparecen token a token.
 - **Sigue el plan.** Claude Code registra el plan que aprobaste y el panel lo
-  pinta como un kanban (pendiente, en curso, hecho, error) que avanza solo.
-- **Abre Claude Code por proyecto.** Eliges una carpeta y se abre una terminal
-  con `claude` corriendo ahí, que ya sabe qué agentes tiene y cómo llamarlos.
+  pinta como un kanban de cinco columnas que avanza solo. También puedes
+  arrastrar las tarjetas y escribir las tuyas.
+- **Abre una terminal por proyecto.** Eliges una carpeta y se abre tu shell de
+  siempre ahí. Escribe `claude` y trabaja como de costumbre; las instrucciones
+  para que sepa qué agentes tiene salen de la pestaña Conexión. La terminal se ve
+  desde cualquier pestaña, en el carril derecho.
+- **Cuenta lo que gasta Claude Code.** El carril derecho lee sus transcripts y
+  desglosa los tokens del día, con la caché aparte.
+- **Edita el código sin salir.** La pestaña Editor trae Monaco, el editor de VS
+  Code, con el árbol del proyecto y guardado con ⌘S.
 - **Edita los agentes.** Nombre, cuándo usarlo, system prompt, temperatura y
   límite de tokens, desde el panel.
 
@@ -39,8 +47,9 @@ prompt distinto, no un modelo distinto: cinco agentes no ocupan más RAM que uno
 
 - macOS 13 o superior (la app es universal: Apple Silicon e Intel)
 - Node.js 18 o superior y [pnpm](https://pnpm.io)
-- [LM Studio](https://lmstudio.ai) con un modelo descargado (probado con
-  OmniCoder-9B Q4_K_M) y su CLI `lms` activada en *Settings > Developer*
+- [LM Studio](https://lmstudio.ai) con uno o dos modelos descargados (probado
+  con Qwen3 4B y Gemma 3 4B, uno por par de agentes) y su CLI `lms` activada en
+  *Settings > Developer*
 - [Claude Code](https://claude.com/claude-code) instalado (`claude` en el PATH)
   para la terminal integrada
 
@@ -62,8 +71,9 @@ Genera `dist/Claude-Dispatch-<versión>.dmg`. Arrastra la app a Aplicaciones y
    el modelo en segundo plano.
 2. Arranca el orquestador con los datos en
    `~/Library/Application Support/Claude Dispatch` (sobreviven a reinstalar).
-3. La ventana nativa carga el panel. Al cerrar la app se detiene el orquestador;
-   LM Studio sigue corriendo.
+3. La ventana nativa carga el panel. Al cerrar la app se detiene el orquestador
+   y también LM Studio (`lms unload --all` y `lms server stop`): cerrar Claude
+   Dispatch deja la RAM libre.
 
 Logs en `~/Library/Logs/Claude Dispatch/`.
 
@@ -93,14 +103,14 @@ El mock entiende dos palabras clave dentro del prompt:
 
 ## Cómo se usa
 
-1. Abre un proyecto desde el panel (**+ carpeta**). Se abre la pestaña
-   **Sesión** con Claude Code corriendo en esa carpeta.
+1. Abre un proyecto desde el panel (**+ carpeta**). Se abre una terminal en esa
+   carpeta, en el carril derecho y en la pestaña **Sesión**; arranca `claude` ahí.
 2. Pídele algo. Para tareas de más de un paso entra en plan mode, lee lo
    necesario y te presenta un plan indicando qué paso hace él y cuál delega.
 3. Apruébalo. Claude Code lo registra con `POST /api/plan` y aparece en
    **Tablero**.
 4. Ejecuta: marca sus pasos con `POST /api/plan/step/{id}` y delega los demás
-   con `POST /agent/{id}` o `POST /delegate`. Lo sigues en **En vivo**.
+   con `POST /agent/{id}` o `POST /delegate`. Lo sigues en **Tablero**.
 5. Revisa cada respuesta, integra, te reporta y cierra el plan.
 
 Si abres Claude Code **fuera** del panel, copia las instrucciones de la pestaña
@@ -112,16 +122,24 @@ este repo como plantilla).
 | Pestaña | Para qué |
 |---|---|
 | **Tablero** | Plan activo como kanban con barra de progreso, e historial de delegaciones |
-| **En vivo** | Un panel por run en curso (hasta el límite de paralelismo), con razonamiento y respuesta en streaming |
-| **Sesión** | Terminal con Claude Code; varias sesiones abiertas a la vez, una visible |
+| **Sesión** | Una terminal por carpeta, con tu shell de siempre; varias abiertas a la vez, una visible |
+| **Editor** | Monaco con el árbol del proyecto: abre, edita y guarda con ⌘S, solo dentro de tus carpetas de Proyectos |
 | **Mapa** | Grafo de un proyecto: un punto por función, unidos por quién llama a quién. Dice dónde está definida y dónde se usa, y copia ese contexto para pegárselo a Claude Code |
 | **Agentes** | Crear, editar, activar o eliminar agentes |
 | **Consola** | Probar un agente a mano (⌘↵ para enviar) |
 | **Conexión** | Instrucciones para `CLAUDE.md`, URL de LM Studio, modelo y paralelismo |
 
 El carril izquierdo lista los proyectos recientes (con su rama de git) y el
-derecho muestra el estado de cada agente, métricas (tareas hoy, tiempo medio,
-tasa de error, tokens estimados) y una gráfica de runs de las últimas 24 h.
+derecho muestra la terminal, el estado de cada agente, métricas (tareas hoy,
+tiempo medio, tasa de error, tokens) y una gráfica de runs de las últimas 24 h.
+
+**El KPI TOKENS CLAUDE es el gasto real de Claude Code**, no una estimación: sale
+de los transcripts que el propio Claude Code escribe en `~/.claude/projects`, de
+donde se lee el `usage` que devolvió la API. Debajo, la tarjeta de desglose
+reparte el día en entrada, salida y caché, y dice cuántas sesiones han escrito
+hoy y cuántas siguen activas. Se actualiza en cuanto Claude Code responde, sin
+recargar nada. Los tokens de los agentes locales van aparte, en **TOKENS
+AGENTES**, y esos sí son una estimación por longitud.
 
 ### Agentes incluidos
 
@@ -155,10 +173,20 @@ frontend en `public/app.js` (JavaScript sin frameworks ni build step).
    `longitud / 4`), emite `run:update` y marca el paso como `done` o `error`.
 
 `POST /delegate` acepta un lote de hasta 12 tareas. No las lanza todas juntas:
-cada run pide turno a una cola global y solo corren `max_parallel` a la vez, en
-estado `queued` mientras esperan. LM Studio sirve un modelo a la vez, así que
-mandarle más peticiones en paralelo no las acelera; multiplica el KV cache y en
-16 GB acaba tirando de swap.
+cada run pide turno en la cola **de su modelo** y solo corren `max_parallel` a la
+vez por modelo, en estado `queued` mientras esperan. Mandarle varias peticiones
+juntas al mismo modelo no las acelera: multiplica el KV cache y en 16 GB acaba
+tirando de swap.
+
+De ahí sale el paralelismo real. Con dos modelos pequeños cargados a la vez y un
+par de agentes en cada uno —Qwen3 4B para `coder` y `tester`, Gemma 3 4B para
+`documenter` y `explainer`— un lote de tests y documentación corre de verdad en
+paralelo, mientras que dos tareas del mismo modelo esperan turno. Sale mejor que
+un solo modelo grande que ocupe toda la RAM y se quede sin contexto.
+
+`freeSlot()` le pasa el turno al primero que espera por ese mismo modelo: el
+turno de Qwen no sirve para arrancar un run de Gemma. Los carriles se crean solos
+al primer run de cada modelo y desaparecen al quedarse vacíos.
 
 Cada run lleva un `AbortController` con dos relojes: uno de inactividad
 (`stall_timeout_ms`, se rearma con cada token) y un tope total
@@ -176,20 +204,20 @@ El panel se suscribe a `GET /api/stream` y recibe:
 ```
 run:start  run:token  run:update  queue:updated  runs:cleared
 plan:new   plan:update  plan:cleared
-agents:updated  projects:updated  terminals:updated
+agents:updated  projects:updated  terminals:updated  claude:usage
 ```
 
 Un ping cada 20 s mantiene viva la conexión. El frontend parchea solo el
-fragmento del DOM que cambia (timeline, paneles en vivo, modal, tarjeta del
-agente) para que el streaming no parpadee ni pierda el scroll.
+fragmento del DOM que cambia (timeline, modal, tarjeta del agente) para que el
+streaming no parpadee ni pierda el scroll.
 
 ### Terminal integrada
 
 - Cada carpeta tiene como mucho una sesión: un pty (`node-pty`) con tu shell de
-  login ejecutando `claude --append-system-prompt "$DISPATCH_INSTRUCTIONS"` y,
-  al salir, una shell interactiva.
-- Las instrucciones (`buildInstructions()`) se generan a partir de los agentes
-  activos y viajan por variable de entorno, sin escapar comillas en el comando.
+  login (`-l -i`) abierta en esa carpeta. Es una terminal normal: no lanza nada
+  por su cuenta, y si quieres Claude Code ahí dentro lo escribes tú.
+- Las instrucciones para Claude Code (`buildInstructions()`) siguen estando en la
+  pestaña **Conexión**, para copiarlas al `CLAUDE.md` del proyecto.
 - La salida se agrupa en ráfagas de 16 ms y se manda por SSE. Se guardan los
   últimos 256 KB para reproducirlos al reconectar. El teclado llega por POST,
   una petición a la vez para conservar el orden.
@@ -221,10 +249,10 @@ no existe se marca como "Suprimido".
 | Clave | Por defecto | Qué es |
 |---|---|---|
 | `lmstudio_url` | `http://127.0.0.1:1234` | URL del servidor de LM Studio |
-| `model` | `omnicoder-9b` | Identificador del modelo cargado |
+| `model` | `qwen/qwen3-4b-2507` | Modelo por defecto: el que usa un agente que no fije el suyo |
 | `app_port` | `3131` | Puerto del orquestador |
 | `max_runs_kept` | `300` | Runs que se conservan en memoria |
-| `max_parallel` | `1` | Runs que corren a la vez; el resto espera en cola. Conviene igualarlo a *Max Concurrency* de LM Studio |
+| `max_parallel` | `1` | Runs que corren a la vez **por cada modelo**; el resto espera en cola. Conviene igualarlo a *Max Concurrency* de LM Studio |
 | `stall_timeout_ms` | `90000` | Corta el run si el modelo no envía nada en ese tiempo |
 | `run_timeout_ms` | `600000` | Tope duro de duración de un run |
 | `max_prompt_chars` | `16000` | Prompts más largos se rechazan con 413 (~4000 tokens) |
@@ -245,6 +273,7 @@ Variables de entorno:
 GET    /api/stream                 SSE del panel
 GET    /api/manifest               agentes activos y cómo llamarlos
 GET    /api/status                 ¿responde LM Studio? + modelos cargados
+GET    /api/claude-usage           tokens gastados por Claude Code (?refresh=1 relee)
 GET    /api/instructions           texto para CLAUDE.md
 GET    /api/graph?path=&refresh=   mapa de código de una carpeta (nodos, aristas y estadísticas)
 
@@ -253,7 +282,10 @@ POST   /delegate                   {tasks: [{agent, prompt, task_label?, step_id
 
 POST   /api/plan                   {title, goal?, project?, steps: [{description, agent|null}]}
 GET    /api/plan
-POST   /api/plan/step/:stepId      {status, note?}
+POST   /api/plan/step/:stepId      {status?, column?, note?}
+POST   /api/plan/step/:id/move     {column, index} — arrastrar una tarjeta
+DELETE /api/plan/step/:stepId      quitar una tarjeta del tablero
+POST   /api/plan/tasks             {description, column?, agent?} — tarjeta a mano
 DELETE /api/plan
 
 GET    /api/agents
@@ -274,6 +306,11 @@ GET    /api/projects
 POST   /api/projects               {path}
 DELETE /api/projects               {path}
 
+GET    /api/files/tree?path=       un nivel del árbol de un proyecto
+GET    /api/files/read?path=       {content, size, mtimeMs}
+POST   /api/files/write            {path, content}
+POST   /api/files/stat             {paths: []} — fechas de los archivos abiertos
+
 GET    /api/terminals
 POST   /api/terminals              {path, cols, rows}
 GET    /api/terminals/:id/stream   SSE: buffer, data, exit
@@ -293,8 +330,48 @@ curl -s -X POST http://localhost:3131/api/plan -H "Content-Type: application/jso
 curl -s -X POST http://localhost:3131/api/plan/step/step-1 -H "Content-Type: application/json" -d '{"status":"done"}'
 curl -s -X POST http://localhost:3131/agent/coder -H "Content-Type: application/json" \
   -d '{"prompt":"hola","task_label":"prueba","step_id":"step-2"}'
-curl -s http://localhost:3131/api/plan    # 2/2 en done
+curl -s http://localhost:3131/api/plan    # step-1 en done, step-2 en review
 ```
+
+---
+
+## Editor, tablero y terminal
+
+### El tablero
+
+Cinco columnas: **TODO**, **EN PROGRESO**, **REVISIÓN**, **HECHO** y **APROBADO**.
+Las tarjetas se arrastran de una a otra y el orden se guarda.
+
+Los pasos que registra Claude Code entran en TODO y se mueven solos: a EN PROGRESO
+cuando arranca el agente y a **REVISIÓN** cuando termina. No van directos a HECHO a
+propósito. El modelo local es de 9B y se equivoca más que tú: REVISIÓN es la
+columna donde compruebas lo que escribió antes de darlo por bueno. HECHO y APROBADO
+los pones tú, arrastrando.
+
+Un run cancelado vuelve a TODO. Uno que falla se queda en REVISIÓN con el borde
+rojo y el motivo en la tarjeta.
+
+También puedes escribir tarjetas tuyas con **+ Agregar la tarea**, con o sin plan
+registrado. Por eso el tablero ahora se guarda en `data/plan.json` y sobrevive a
+reiniciar el servidor; los runs siguen viviendo solo en memoria.
+
+### El editor
+
+La pestaña **Editor** trae Monaco, el mismo editor que usa VS Code: árbol de
+archivos a la izquierda, pestañas de archivos abiertos, resaltado de sintaxis,
+buscar y reemplazar, y minimapa. Se guarda con **⌘S**.
+
+Solo ve y escribe dentro de las carpetas que ya tienes en **Proyectos**. Fuera
+quedan `node_modules`, `.git`, los archivos de más de 2 MB y los binarios. Si
+Claude Code cambia un archivo que tienes abierto y tú no lo has tocado, se recarga
+solo sin moverte el cursor; si lo tenías a medio editar, te avisa y no lo pisa.
+
+### La terminal
+
+La sesión de Claude Code vive en el carril derecho, encima de la lista de agentes,
+así que la ves desde cualquier pestaña mientras trabajas. Se puede plegar y
+estirar. Al abrir la pestaña **Sesión** la misma terminal se muda al panel grande:
+es una sola instancia, no una copia.
 
 ---
 
@@ -320,9 +397,11 @@ orquestador-agentes/          raíz del repo
   orquestador-agentes/
     server.js                 backend completo
     codegraph.js              escáner estático para el mapa de código
-    public/                   panel: index.html, styles.css, app.js, graph.js
-    data/                     agents.json, config.json
-    test/                     tests del escáner (pnpm test)
+    kanban.js                 columnas del tablero y colocación de tarjetas
+    safepath.js               contención de rutas del editor
+    public/                   panel: index.html, styles.css, app.js, graph.js, editor.js
+    data/                     agents.json, config.json (y plan.json, projects.json)
+    test/                     tests del escáner, el tablero y las rutas (pnpm test)
     dev/mock-lmstudio.js      simulador de LM Studio
   macos/
     ClaudeDispatch.swift      ventana nativa (WKWebView), portapapeles y selector de carpeta
@@ -341,7 +420,12 @@ orquestador-agentes/          raíz del repo
 - Un solo plan a la vez: registrar otro pisa el anterior.
 - La cola es global y sin prioridades: un lote largo retrasa a la delegación que
   llegue después.
-- Runs, plan y métricas viven en memoria; reiniciar los borra.
-- El conteo de tokens es una estimación.
+- Los runs y las métricas viven en memoria; reiniciar los borra. El tablero no:
+  se guarda en `data/plan.json`.
+- El editor abre, edita y guarda, pero no crea ni borra archivos, y no muestra
+  el estado de Git.
+- El conteo de tokens de los agentes locales es una estimación. El de Claude Code
+  es real, pero sale de sus archivos: solo se leen los últimos 7 días y, si los
+  borras, el histórico se va con ellos.
 - El editor de agentes guarda el array completo: dos pestañas editando a la vez
   se pisan.
