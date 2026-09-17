@@ -49,70 +49,167 @@ function showTab(tab) {
 $$(".tab-btn").forEach((btn) => btn.addEventListener("click", () => showTab(btn.dataset.tab)));
 
 // ================= Render: plan (kanban) =================
+// Las mismas cinco columnas que el servidor (kanban.js). El glifo es solo
+// adorno: lo que manda es la clase de la columna, que trae su color.
 const KANBAN_COLUMNS = [
-  ["pending", "PENDIENTE"],
-  ["running", "EN CURSO"],
-  ["done", "HECHO"],
-  ["error", "ERROR"],
+  ["todo", "TODO", "▤"],
+  ["progress", "EN PROGRESO", "◐"],
+  ["review", "REVISIÓN", "◉"],
+  ["done", "HECHO", "✓"],
+  ["approved", "APROBADO", "✓✓"],
 ];
+const DONE_COLUMNS = ["done", "approved"];
+// Id de la tarjeta que se está arrastrando. Mientras haya una, el tablero no se
+// vuelve a dibujar: un plan:update a media arrastrada la dejaría caer al vacío.
+let draggingId = null;
+let planDirty = false;
 
 function renderPlan() {
-  $("#planEndpoint").textContent = `POST http://localhost:${config.app_port || 3131}/api/plan`;
-  if (!currentPlan) {
-    $("#planWrap").hidden = true;
-    $("#planEmpty").hidden = false;
-    renderProjects();
+  // Redibujar mientras arrastras dejaría la tarjeta caer al vacío: se aplaza
+  if (draggingId) {
+    planDirty = true;
     return;
   }
-  $("#planWrap").hidden = false;
-  $("#planEmpty").hidden = true;
+  planDirty = false;
+  $("#planEndpoint").textContent = `POST http://localhost:${config.app_port || 3131}/api/plan`;
+  // El tablero se ve siempre: aunque Claude Code no haya registrado un plan,
+  // puedes escribir tarjetas a mano y la primera crea el tablero en el servidor.
+  const steps = currentPlan ? currentPlan.steps : [];
+  $("#planEmpty").hidden = !!currentPlan;
+  $("#planHead").hidden = !currentPlan;
 
-  const project = projects.find((p) => p.path === currentPlan.project);
-  const goalParts = [currentPlan.goal, project?.branch ? `⑂ ${project.branch}` : null].filter(Boolean);
-  $("#planTitle").textContent = currentPlan.title;
-  $("#planGoal").textContent = goalParts.join(" · ");
+  if (currentPlan) {
+    const project = projects.find((p) => p.path === currentPlan.project);
+    const goalParts = [currentPlan.goal, project?.branch ? `⑂ ${project.branch}` : null].filter(Boolean);
+    $("#planTitle").textContent = currentPlan.title;
+    $("#planGoal").textContent = goalParts.join(" · ");
+  }
 
-  const total = currentPlan.steps.length;
-  const done = currentPlan.steps.filter((s) => s.status === "done").length;
-  $("#planBar").style.width = `${(done / total) * 100}%`;
-  $("#planCount").textContent = `${done}/${total} pasos`;
+  const total = steps.length;
+  const done = steps.filter((s) => DONE_COLUMNS.includes(columnOf(s))).length;
+  $("#planBar").style.width = `${total ? (done / total) * 100 : 0}%`;
+  $("#planCount").textContent = `${done}/${total} tarjetas`;
 
   const board = $("#kanban");
   board.innerHTML = "";
-  KANBAN_COLUMNS.forEach(([status, title]) => {
-    const steps = currentPlan.steps.filter((s) => (s.status || "pending") === status);
+  KANBAN_COLUMNS.forEach(([column, title, glyph]) => {
+    const inColumn = steps.filter((s) => columnOf(s) === column).sort(bySort);
     const col = document.createElement("div");
-    col.className = `kcol ${status}`;
+    col.className = `kcol ${column}`;
     col.innerHTML = `
       <div class="kcol-head">
         <span class="cdot"></span>
+        <span class="cglyph">${glyph}</span>
         <span class="ctitle">${title}</span>
-        <span class="ccount">${steps.length}</span>
+        <span class="ccount">${inColumn.length}</span>
       </div>
       <div class="kcol-body"></div>
+      <button class="kadd">+ Agregar la tarea</button>
     `;
     const body = col.querySelector(".kcol-body");
-    if (steps.length === 0) body.innerHTML = '<span class="kcol-empty">sin pasos</span>';
-    steps.forEach((step) => body.appendChild(renderStepCard(step)));
+    if (inColumn.length === 0) body.innerHTML = '<span class="kcol-empty">Sin tareas</span>';
+    inColumn.forEach((step) => body.appendChild(renderStepCard(step)));
+    col.querySelector(".kadd").addEventListener("click", () => openNewCard(col, column));
+    wireDropTarget(body, column);
     board.appendChild(col);
   });
 
   renderProjects();
 }
 
+// El servidor manda 'column'; los planes guardados de antes solo tenían 'status'
+const columnOf = (step) => step.column || LEGACY_TO_COLUMN[step.status] || "todo";
+const LEGACY_TO_COLUMN = { pending: "todo", queued: "todo", running: "progress", error: "review" };
+const bySort = (a, b) => (a.sort ?? a.order ?? 0) - (b.sort ?? b.order ?? 0);
+
+// ---- Arrastrar y soltar ----
+// Sin librería: la API nativa de HTML5 basta y el orden lo recalcula el servidor.
+function wireDropTarget(body, column) {
+  body.addEventListener("dragover", (e) => {
+    if (!draggingId) return;
+    e.preventDefault();
+    body.classList.add("drop-over");
+  });
+  body.addEventListener("dragleave", () => body.classList.remove("drop-over"));
+  body.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    body.classList.remove("drop-over");
+    const id = draggingId || e.dataTransfer.getData("text/plain");
+    if (!id) return;
+    const index = dropIndex(body, e.clientY);
+    draggingId = null;
+    try {
+      await api(`/api/plan/step/${id}/move`, { column, index });
+    } catch (err) {
+      alert(err.message);
+      renderPlan(); // el servidor manda: si rechazó el movimiento, se deshace
+    }
+  });
+}
+
+// Posición donde cae la tarjeta: la primera cuya mitad queda por debajo del cursor
+function dropIndex(body, y) {
+  const cards = [...body.querySelectorAll(".kcard:not(.dragging)")];
+  for (let i = 0; i < cards.length; i++) {
+    const r = cards[i].getBoundingClientRect();
+    if (y < r.top + r.height / 2) return i;
+  }
+  return cards.length;
+}
+
+// ---- Tarjeta nueva escrita a mano ----
+function openNewCard(col, column) {
+  if (col.querySelector(".knew")) return;
+  const box = document.createElement("div");
+  box.className = "knew";
+  box.innerHTML = '<textarea rows="2" placeholder="¿Qué hay que hacer?"></textarea>';
+  col.querySelector(".kcol-body").appendChild(box);
+  const input = box.querySelector("textarea");
+  input.focus();
+
+  // Quitar el cuadro dispara su propio blur: sin este cerrojo, Enter crearía
+  // la tarjeta dos veces
+  let closed = false;
+  const close = () => {
+    closed = true;
+    box.remove();
+  };
+  const save = async () => {
+    if (closed) return;
+    const description = input.value.trim();
+    close();
+    if (!description) return;
+    try {
+      await api("/api/plan/tasks", { description, column });
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      save();
+    }
+    if (e.key === "Escape") close();
+  });
+  input.addEventListener("blur", save);
+}
+
 function renderStepCard(step) {
   const agent = agents.find((a) => a.id === step.agent);
+  const column = columnOf(step);
   const card = document.createElement("div");
-  card.className = `kcard ${step.status}`;
+  card.className = `kcard ${column}${step.error ? " failed" : ""}`;
+  card.draggable = true;
 
   const who = step.agent
     ? `<span class="who">${agent?.emoji || "🤖"} ${escapeHtml(agent?.name || step.agent)}</span>`
-    : '<span class="who claude">◈ Claude Code</span>';
+    : `<span class="who ${step.manual ? "mine" : "claude"}">${step.manual ? "✎ Tuya" : "◈ Claude Code"}</span>`;
 
   const meta = [];
-  if (step.status === "running") meta.push(step.agent ? "escribiendo…" : "en curso");
+  if (column === "progress") meta.push(step.agent ? "escribiendo…" : "en curso");
   if (step.durationMs) meta.push(formatSeconds(step.durationMs));
-  if (step.status === "error" && !step.note) meta.push("error");
+  if (step.error && !step.note) meta.push("error");
   if (step.note) meta.push(step.note);
 
   card.innerHTML = `
@@ -121,12 +218,38 @@ function renderStepCard(step) {
       <span class="knum">#${step.order}</span>
       ${who}
       ${meta.length ? `<span class="kmeta-text">${escapeHtml(meta.join(" · "))}</span>` : ""}
+      <button class="kdel" title="Quitar del tablero">✕</button>
     </div>
   `;
 
+  card.addEventListener("dragstart", (e) => {
+    draggingId = step.id;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", step.id);
+    requestAnimationFrame(() => card.classList.add("dragging"));
+  });
+  card.addEventListener("dragend", () => {
+    draggingId = null;
+    card.classList.remove("dragging");
+    if (planDirty) renderPlan(); // se aplazaron los cambios mientras arrastrabas
+  });
+
+  card.querySelector(".kdel").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!confirm(`¿Quitar "${step.description}" del tablero?`)) return;
+    try {
+      await api(`/api/plan/step/${step.id}`, undefined, "DELETE");
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
   if (step.runId) {
     card.classList.add("clickable");
-    card.addEventListener("click", () => openRunModal(step.runId));
+    card.addEventListener("click", (e) => {
+      if (e.target.closest(".kdel")) return;
+      openRunModal(step.runId);
+    });
   }
   return card;
 }

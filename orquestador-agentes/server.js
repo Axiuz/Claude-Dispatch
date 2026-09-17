@@ -5,6 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const pty = require("node-pty");
 const { buildGraph } = require("./codegraph");
+const { COLUMNS, COLUMN_AFTER_RUN, columnFor, placeStep } = require("./kanban");
 
 const DEFAULT_DATA_DIR = path.join(__dirname, "data");
 // La app de macOS pasa ORQ_DATA_DIR para guardar los datos fuera del bundle
@@ -21,6 +22,9 @@ const AGENTS_PATH = path.join(DATA_DIR, "agents.json");
 const CONFIG_PATH = path.join(DATA_DIR, "config.json");
 // Lista de carpetas recientes. No se siembra: lleva rutas reales del usuario.
 const PROJECTS_PATH = path.join(DATA_DIR, "projects.json");
+// El tablero sí va a disco: desde que se pueden añadir tarjetas a mano, contiene
+// trabajo del usuario y no solo el reflejo de lo que hace Claude Code.
+const PLAN_PATH = path.join(DATA_DIR, "plan.json");
 
 const loadJSON = (p) => JSON.parse(fs.readFileSync(p, "utf-8"));
 const saveJSON = (p, o) => fs.writeFileSync(p, JSON.stringify(o, null, 2));
@@ -34,8 +38,9 @@ const findAgent = (id) => getAgents().find((a) => a.id === id);
 // ============ Estado en vivo ============
 // runs: historial + estado actual de cada delegación
 let runs = [];
-// currentPlan: el plan aprobado que Claude Code está ejecutando
-let currentPlan = null;
+// currentPlan: el plan aprobado que Claude Code está ejecutando. A diferencia de
+// los runs, sobrevive al reinicio (ver PLAN_PATH).
+let currentPlan = fs.existsSync(PLAN_PATH) ? loadJSON(PLAN_PATH) : null;
 // clientes SSE conectados (el panel)
 let sseClients = [];
 
@@ -71,7 +76,7 @@ function createRun({ agentId, prompt, source, meta }) {
   if (runs.length > (config.max_runs_kept || 300)) runs.length = config.max_runs_kept;
 
   // Si el run pertenece a un paso del plan, marcar ese paso como en curso
-  if (run.stepId) setStepStatus(run.stepId, "running", { runId: run.id });
+  if (run.stepId) setStepColumn(run.stepId, "progress", { runId: run.id, error: false, note: null });
 
   broadcast("run:start", run);
   return run;
@@ -80,20 +85,47 @@ function createRun({ agentId, prompt, source, meta }) {
 function updateRun(run, patch) {
   Object.assign(run, patch);
   if (run.stepId && ["done", "error", "cancelled"].includes(run.status)) {
-    setStepStatus(run.stepId, run.status === "done" ? "done" : "error", {
+    // Lo que escribe un agente local no pasa a HECHO solo: va a REVISIÓN, que es
+    // donde el usuario lo comprueba. Un run cancelado vuelve a PENDIENTE.
+    const column = COLUMN_AFTER_RUN[run.status];
+    setStepColumn(run.stepId, column, {
       runId: run.id,
       durationMs: run.durationMs,
+      error: run.status === "error",
+      note: run.status === "cancelled" ? "cancelado" : run.status === "error" ? truncateNote(run.error) : null,
     });
   }
   broadcast("run:update", run);
 }
 
-function setStepStatus(stepId, status, extra = {}) {
+// ============ Tablero kanban ============
+// Las columnas y la colocación de tarjetas viven en kanban.js, sin estado.
+const MAX_STEPS = 200;
+const truncateNote = (text) => (text ? String(text).split("\n")[0].slice(0, 120) : null);
+const place = (step, column, index) => placeStep(currentPlan.steps, step, column, index);
+
+function savePlan() {
+  try {
+    if (currentPlan) saveJSON(PLAN_PATH, currentPlan);
+    else if (fs.existsSync(PLAN_PATH)) fs.rmSync(PLAN_PATH);
+  } catch (err) {
+    console.error("No se pudo guardar el plan:", err.message);
+  }
+}
+
+// Todo cambio en el tablero pasa por aquí: se guarda y se avisa al panel.
+function planChanged() {
+  savePlan();
+  broadcast("plan:update", currentPlan);
+}
+
+function setStepColumn(stepId, column, extra = {}) {
   if (!currentPlan) return;
   const step = currentPlan.steps.find((s) => s.id === stepId);
   if (!step) return;
-  Object.assign(step, { status, ...extra });
-  broadcast("plan:update", currentPlan);
+  Object.assign(step, extra);
+  if (column && column !== step.column) place(step, column, 0);
+  planChanged();
 }
 
 // ============ Proyectos recientes ============
@@ -649,10 +681,16 @@ auth o credenciales (sí puedes pedir revisión).
          ]}'
    ("agent": null = lo haces tú; "project" = la carpeta donde trabajas)
 
+   El tablero tiene cinco columnas: todo, progress, review, done, approved.
+   Los pasos entran en todo; un run los pasa solo a progress y, al terminar, a
+   review — es ahí donde yo compruebo lo que escribió el agente. A done y
+   approved los muevo yo desde el panel.
+
 3) EJECUCIÓN
    Paso tuyo:
      curl -s -X POST http://localhost:${port}/api/plan/step/step-1 \\
        -H "Content-Type: application/json" -d '{"status":"done"}'
+   (también acepta {"column":"review"} si quieres dejarlo para que yo lo mire)
 
    Paso delegado (incluye el contexto en el prompt):
      curl -s -X POST http://localhost:${port}/agent/{id} \\
@@ -874,17 +912,25 @@ app.post("/api/plan", (req, res) => {
     goal: goal || "",
     project: validProject,
     createdAt: new Date().toISOString(),
+    // seq numera las tarjetas: sigue subiendo cuando se añaden a mano
+    seq: steps.length,
     steps: steps.map((s, i) => ({
       id: `step-${i + 1}`,
       order: i + 1,
+      sort: i + 1,
       description: s.description,
       agent: s.agent || null, // null = lo hace Claude Code directamente
-      status: "pending",
+      column: "todo",
+      status: "todo",
+      manual: false, // las tarjetas manuales las escribe el usuario en el panel
+      error: false,
+      note: null,
       runId: null,
       durationMs: null,
     })),
   };
 
+  savePlan();
   broadcast("plan:new", currentPlan);
   res.json(currentPlan);
 });
@@ -894,18 +940,93 @@ app.get("/api/plan", (req, res) => res.json(currentPlan || null));
 // Marcar un paso que hizo Claude Code directamente (sin agente local)
 app.post("/api/plan/step/:stepId", (req, res) => {
   if (!currentPlan) return res.status(404).json({ error: "No hay plan activo" });
-  const { status, note } = req.body;
+  const { status, column, note } = req.body;
   const step = currentPlan.steps.find((s) => s.id === req.params.stepId);
   if (!step) return res.status(404).json({ error: "Paso no encontrado" });
 
-  step.status = status || step.status;
-  if (note) step.note = note;
-  broadcast("plan:update", currentPlan);
+  // 'status' es el vocabulario de siempre (pending/running/done/error) y se
+  // traduce; 'column' es directo. Un paso marcado 'error' no cambia de columna:
+  // se queda donde está con la marca roja.
+  if (status === "error") step.error = true;
+  else if (status || column) {
+    step.error = false;
+    place(step, columnFor(column || status, step.column), 0);
+  }
+  if (note !== undefined) step.note = note;
+  planChanged();
   res.json(step);
+});
+
+// Tarjeta escrita a mano en el panel: no viene de ningún paso del plan
+app.post("/api/plan/tasks", (req, res) => {
+  const description = String(req.body.description || "").trim();
+  // Sin plan registrado el tablero sigue sirviendo: la primera tarjeta lo estrena
+  if (!currentPlan) {
+    currentPlan = {
+      id: crypto.randomUUID(),
+      title: "Tablero",
+      goal: "",
+      project: null,
+      createdAt: new Date().toISOString(),
+      seq: 0,
+      steps: [],
+    };
+    broadcast("plan:new", currentPlan);
+  }
+  if (!description) return res.status(400).json({ error: "Falta 'description'" });
+  if (currentPlan.steps.length >= MAX_STEPS) {
+    return res.status(409).json({ error: `El tablero no admite más de ${MAX_STEPS} tarjetas` });
+  }
+
+  currentPlan.seq = (currentPlan.seq || currentPlan.steps.length) + 1;
+  const step = {
+    id: `step-${currentPlan.seq}`,
+    order: currentPlan.seq,
+    sort: 0,
+    description: description.slice(0, 500),
+    agent: findAgent(req.body.agent) ? req.body.agent : null,
+    column: "todo",
+    status: "todo",
+    manual: true,
+    error: false,
+    note: null,
+    runId: null,
+    durationMs: null,
+  };
+  currentPlan.steps.push(step);
+  place(step, columnFor(req.body.column), req.body.index);
+  planChanged();
+  res.json(step);
+});
+
+// Arrastrar y soltar: cambia de columna y de posición dentro de ella
+app.post("/api/plan/step/:stepId/move", (req, res) => {
+  if (!currentPlan) return res.status(404).json({ error: "No hay plan activo" });
+  const step = currentPlan.steps.find((s) => s.id === req.params.stepId);
+  if (!step) return res.status(404).json({ error: "Paso no encontrado" });
+  if (!COLUMNS.includes(req.body.column)) {
+    return res.status(400).json({ error: `'column' debe ser una de: ${COLUMNS.join(", ")}` });
+  }
+
+  // Mover una tarjeta a mano es dar por vista la marca de error
+  if (["done", "approved"].includes(req.body.column)) step.error = false;
+  place(step, req.body.column, req.body.index);
+  planChanged();
+  res.json(step);
+});
+
+app.delete("/api/plan/step/:stepId", (req, res) => {
+  if (!currentPlan) return res.status(404).json({ error: "No hay plan activo" });
+  const idx = currentPlan.steps.findIndex((s) => s.id === req.params.stepId);
+  if (idx < 0) return res.status(404).json({ error: "Paso no encontrado" });
+  const [step] = currentPlan.steps.splice(idx, 1);
+  planChanged();
+  res.json({ ok: true, removed: step.id });
 });
 
 app.delete("/api/plan", (req, res) => {
   currentPlan = null;
+  savePlan();
   broadcast("plan:cleared", {});
   res.json({ ok: true });
 });

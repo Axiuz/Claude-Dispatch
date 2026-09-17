@@ -236,34 +236,69 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 
 #planWrap { display: flex; flex-direction: column; gap: 14px; }
 
-.kanban { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
-@media (max-width: 1250px) { .kanban { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.kanban { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; align-items: start; }
+@media (max-width: 1560px) { .kanban { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1100px) { .kanban { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .kcol {
   --col: var(--muted);
   background: var(--sunken); border: 1px solid var(--border-soft); border-radius: var(--radius);
   display: flex; flex-direction: column; overflow: hidden; min-height: 150px;
 }
-.kcol.running { --col: var(--accent); }
+.kcol.progress { --col: var(--accent); }
+.kcol.review { --col: var(--violet); }
 .kcol.done { --col: var(--green); }
-.kcol.error { --col: var(--red); }
-.kcol-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border-bottom: 1px solid var(--border-soft); }
+.kcol.approved { --col: var(--green); }
+.kcol-head {
+  display: flex; align-items: center; gap: 7px; padding: 8px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--col) 12%, transparent);
+}
+.kcol.approved .kcol-head { background: color-mix(in srgb, var(--green) 20%, transparent); }
 .kcol-head .cdot { width: 6px; height: 6px; border-radius: 50%; background: var(--col); }
+.kcol-head .cglyph { font-size: 10px; color: var(--col); opacity: 0.8; }
 .kcol-head .ctitle { font-size: 10.5px; letter-spacing: 0.7px; font-weight: 600; color: var(--col); }
 .kcol-head .ccount { margin-left: auto; font-size: 10.5px; color: var(--faint); font-family: var(--mono); }
-.kcol-body { flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 7px; max-height: 320px; overflow-y: auto; }
+.kcol-body {
+  flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 7px;
+  min-height: 96px; max-height: 44vh; overflow-y: auto;
+}
+.kcol-body.drop-over { background: color-mix(in srgb, var(--col) 9%, transparent); }
 .kcol-empty { border: 1px dashed var(--border); border-radius: 7px; padding: 10px; font-size: 11px; color: var(--ghost); text-align: center; }
+
+/* Añadir una tarjeta a mano */
+.kadd {
+  margin: 0 8px 8px; padding: 9px; border-radius: 7px; cursor: pointer;
+  background: transparent; border: 1px dashed var(--border-dashed);
+  color: var(--faint); font-size: 11.5px; text-align: center;
+}
+.kadd:hover { border-color: var(--col); color: var(--col); }
+.knew textarea {
+  width: 100%; resize: none; border-radius: 7px; padding: 8px 9px;
+  background: var(--panel-2); border: 1px solid var(--accent-line); color: var(--text);
+  font-family: var(--sans); font-size: 12.5px; line-height: 1.4; outline: none;
+}
 
 .kcard {
   background: var(--panel-2); border: 1px solid var(--border); border-left: 2px solid var(--col);
   border-radius: 7px; padding: 9px 10px; display: flex; flex-direction: column; gap: 5px;
+  cursor: grab;
 }
+.kcard.dragging { opacity: 0.35; cursor: grabbing; }
+.kcard.failed { border-color: var(--red-line); }
+.kcard.failed .kmeta-text { color: var(--red); }
+.kcard .kdel {
+  margin-left: auto; background: none; border: none; cursor: pointer; padding: 0 2px;
+  color: var(--ghost); font-size: 11px; opacity: 0; transition: opacity 0.12s;
+}
+.kcard:hover .kdel { opacity: 1; }
+.kcard .kdel:hover { color: var(--red); }
 .kcard.clickable { cursor: pointer; }
 .kcard.clickable:hover { border-color: var(--ghost); border-left-color: var(--col); }
 .kcard .kdesc { font-size: 12.5px; line-height: 1.4; }
 .kcard .kmeta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .kcard .kmeta-text { font-size: 10.5px; color: var(--faint); font-family: var(--mono); }
-.kcard.error .kmeta-text { color: var(--red); }
+.who.mine { background: var(--accent-soft); color: var(--accent-hover); }
 .kcard .knum { font-size: 10.5px; color: var(--faint); font-family: var(--mono); }
 
 .who { font-size: 10.5px; padding: 1px 7px; border-radius: 9px; background: var(--panel-3); color: var(--muted); }

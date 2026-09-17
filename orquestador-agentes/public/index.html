@@ -45,8 +45,14 @@
 
     <!-- ============ TABLERO ============ -->
     <section id="tab-tablero" class="tab-panel active">
-      <div id="planWrap" hidden>
-        <div class="plan-head">
+      <div class="plan-empty slim" id="planEmpty">
+        <span class="plan-empty-title">Sin plan en ejecución</span>
+        <span class="plan-empty-text">Cuando Claude Code registre un plan, sus pasos aparecen abajo como tarjetas y se mueven solos entre columnas. Mientras tanto el tablero es tuyo: añade las tarjetas que quieras.</span>
+        <span class="code-chip" id="planEndpoint"></span>
+      </div>
+
+      <div id="planWrap">
+        <div class="plan-head" id="planHead">
           <div class="plan-titles">
             <div class="plan-title" id="planTitle"></div>
             <div class="plan-goal" id="planGoal"></div>
@@ -58,12 +64,6 @@
           <button id="clearPlanBtn" class="btn">Cerrar plan</button>
         </div>
         <div class="kanban" id="kanban"></div>
-      </div>
-
-      <div class="plan-empty" id="planEmpty">
-        <span class="plan-empty-title">Sin plan en ejecución</span>
-        <span class="plan-empty-text">Cuando Claude Code apruebe un plan y lo registre, sus pasos aparecen aquí como tarjetas y se mueven solos entre columnas.</span>
-        <span class="code-chip" id="planEndpoint"></span>
       </div>
 
       <div class="section-head">

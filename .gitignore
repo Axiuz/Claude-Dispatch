@@ -6,3 +6,6 @@ dist/
 
 # Proyectos recientes: rutas reales del usuario
 orquestador-agentes/data/projects.json
+
+# Tablero: rutas reales y tarjetas del usuario
+orquestador-agentes/data/plan.json
