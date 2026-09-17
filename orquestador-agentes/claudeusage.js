@@ -17,7 +17,10 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const DAY_MS = 24 * 3600 * 1000;
+const HOUR_MS = 3600 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const SESSION_HOURS = 5;
+const WEEK_HOURS = 7 * 24;
 const DEFAULT_DAYS = 7; // ventana de archivos que se leen, por mtime
 const ACTIVE_MS = 5 * 60 * 1000; // una sesión "activa" es la que escribió hace poco
 
@@ -35,6 +38,11 @@ function dayKey(date) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+function hourOf(value) {
+  const ms = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isNaN(ms) ? null : Math.floor(ms / HOUR_MS);
 }
 
 function emptyTotals() {
@@ -99,6 +107,54 @@ function splitLines(buffer) {
   return { lines, rest: buffer.slice(start) };
 }
 
+function sumHours(byHour, fromHour, toHour) {
+  const totals = emptyTotals();
+  byHour.forEach((value, hour) => {
+    if (hour < fromHour || hour > toHour) return;
+    totals.input += value.input;
+    totals.output += value.output;
+    totals.cacheCreate += value.cacheCreate;
+    totals.cacheRead += value.cacheRead;
+    totals.total += value.total;
+    totals.messages += value.messages;
+  });
+  return totals;
+}
+
+function sessionBlocks(byHour, blockHours = SESSION_HOURS) {
+  const hours = [...byHour.keys()].sort((a, b) => a - b);
+  const blocks = [];
+  let current = null;
+  for (const hour of hours) {
+    // Un bloque dura blockHours desde su primera hora activa, aunque dentro no
+    // haya actividad continua: así es como Claude Code cuenta una sesión
+    if (!current || hour >= current.startHour + blockHours) {
+      current = { startHour: hour, lastHour: hour, totals: emptyTotals() };
+      blocks.push(current);
+    }
+    const value = byHour.get(hour);
+    current.lastHour = hour;
+    current.totals.input += value.input;
+    current.totals.output += value.output;
+    current.totals.cacheCreate += value.cacheCreate;
+    current.totals.cacheRead += value.cacheRead;
+    current.totals.total += value.total;
+    current.totals.messages += value.messages;
+  }
+  return blocks.map((block) => ({
+    startAt: new Date(block.startHour * HOUR_MS).toISOString(),
+    resetAt: new Date((block.startHour + blockHours) * HOUR_MS).toISOString(),
+    lastAt: new Date((block.lastHour + 1) * HOUR_MS).toISOString(),
+    ...block.totals,
+  }));
+}
+
+function activeBlock(blocks, now = Date.now()) {
+  const last = blocks[blocks.length - 1];
+  if (!last) return null;
+  return Date.parse(last.resetAt) > now ? last : null;
+}
+
 // ---------- Tracker ----------
 
 function createTracker(options = {}) {
@@ -106,11 +162,13 @@ function createTracker(options = {}) {
   const days = options.days || DEFAULT_DAYS;
   const onChange = options.onChange || (() => {});
   const pollMs = options.pollMs ?? 4000;
+  const blockHours = options.blockHours || SESSION_HOURS;
 
   const files = new Map(); // ruta -> {offset, rest, day, mtimeMs, tokens}
   const seen = new Set(); // message.id ya contados
   const byDay = new Map(); // "YYYY-MM-DD" -> totals
   const byModel = new Map(); // modelo -> totals
+  const byHour = new Map(); // hora epoch -> totals, para los bloques de sesión
   const all = emptyTotals();
 
   let lastAt = null;
@@ -132,6 +190,8 @@ function createTracker(options = {}) {
     addUsage(all, entry.usage);
     addUsage(bucket(byDay, day), entry.usage);
     addUsage(bucket(byModel, entry.model), entry.usage);
+    const hour = (entry.ts && hourOf(entry.ts)) || hourOf(new Date());
+    addUsage(bucket(byHour, hour), entry.usage);
     if (file) {
       file.day = day;
       file.tokens += (entry.usage.input_tokens || 0) + (entry.usage.output_tokens || 0);
@@ -241,11 +301,29 @@ function createTracker(options = {}) {
     const history = [...byDay.entries()]
       .map(([day, totals]) => ({ day, ...totals }))
       .sort((a, b) => (a.day < b.day ? -1 : 1));
+    const nowHour = hourOf(new Date());
+    const blocks = sessionBlocks(byHour, blockHours);
+    const current = activeBlock(blocks, Date.now());
     return {
       available,
       days,
+      blockHours,
       today: { ...(byDay.get(today) || emptyTotals()) },
       window: { ...all },
+      session: current
+        ? { ...current, active: true }
+        : {
+            ...emptyTotals(),
+            active: false,
+            startAt: null,
+            resetAt: null,
+            lastAt: blocks.length ? blocks[blocks.length - 1].lastAt : null,
+          },
+      weekly: {
+        ...sumHours(byHour, nowHour - WEEK_HOURS + 1, nowHour),
+        sinceAt: new Date((nowHour - WEEK_HOURS + 1) * HOUR_MS).toISOString(),
+        hours: WEEK_HOURS,
+      },
       models,
       history,
       sessions: sessionCounts(),
@@ -296,4 +374,19 @@ function createTracker(options = {}) {
   return { start, stop, tick, snapshot, root };
 }
 
-module.exports = { createTracker, usageRoot, dayKey, emptyTotals, addUsage, parseEntry, splitLines };
+module.exports = {
+  createTracker,
+  usageRoot,
+  dayKey,
+  hourOf,
+  emptyTotals,
+  addUsage,
+  parseEntry,
+  splitLines,
+  sessionBlocks,
+  activeBlock,
+  sumHours,
+  SESSION_HOURS,
+  WEEK_HOURS,
+  HOUR_MS,
+};

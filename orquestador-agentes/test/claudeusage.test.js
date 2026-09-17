@@ -15,6 +15,10 @@ const {
   emptyTotals,
   dayKey,
   createTracker,
+  sessionBlocks,
+  activeBlock,
+  sumHours,
+  HOUR_MS,
 } = require("../claudeusage");
 
 // ---------- addUsage ----------
@@ -244,4 +248,88 @@ test("sin carpeta de transcripts el tracker lo dice en vez de reventar", () => {
   tracker.stop();
   assert.equal(snap.available, false);
   assert.equal(snap.window.total, 0);
+});
+
+// ---------- bloques de sesión ----------
+
+const hourTotals = (n) => addUsage(emptyTotals(), { input_tokens: n });
+const hours = (pairs) => new Map(pairs.map(([hour, n]) => [hour, hourTotals(n)]));
+
+test("sin horas no hay bloques", () => {
+  assert.deepEqual(sessionBlocks(new Map()), []);
+});
+
+test("las horas dentro de las 5 h caen en un solo bloque", () => {
+  const blocks = sessionBlocks(hours([[0, 10], [1, 5], [4, 5]]));
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].total, 20);
+  assert.equal(blocks[0].messages, 3);
+});
+
+test("a las 5 h del inicio empieza un bloque nuevo, aunque no haya hueco", () => {
+  const blocks = sessionBlocks(hours([[0, 10], [5, 7]]));
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[1].total, 7);
+});
+
+test("el bloque nuevo arranca en su primera hora activa, no donde acabó el anterior", () => {
+  const blocks = sessionBlocks(hours([[0, 10], [9, 7]]));
+  assert.equal(blocks[1].startAt, new Date(9 * HOUR_MS).toISOString());
+  assert.equal(blocks[1].resetAt, new Date(14 * HOUR_MS).toISOString());
+});
+
+test("las horas se ordenan aunque lleguen desordenadas", () => {
+  const blocks = sessionBlocks(hours([[6, 7], [0, 10]]));
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0].total, 10);
+  assert.equal(blocks[1].total, 7);
+});
+
+test("resetAt es el inicio del bloque más su duración", () => {
+  const blocks = sessionBlocks(hours([[3, 1]]), 5);
+  assert.equal(Date.parse(blocks[0].resetAt) - Date.parse(blocks[0].startAt), 5 * HOUR_MS);
+});
+
+test("la duración del bloque es configurable", () => {
+  assert.equal(sessionBlocks(hours([[0, 1], [3, 1]]), 2).length, 2);
+});
+
+test("activeBlock devuelve el último bloque mientras no llegue su reset", () => {
+  const blocks = sessionBlocks(hours([[10, 4]]));
+  const block = activeBlock(blocks, 12 * HOUR_MS);
+  assert.equal(block.total, 4);
+});
+
+test("activeBlock devuelve null cuando el último bloque ya expiró", () => {
+  const blocks = sessionBlocks(hours([[10, 4]]));
+  assert.equal(activeBlock(blocks, 20 * HOUR_MS), null);
+});
+
+test("activeBlock sin bloques devuelve null", () => {
+  assert.equal(activeBlock([], Date.now()), null);
+});
+
+test("sumHours suma solo el rango pedido, con los dos extremos dentro", () => {
+  const totals = sumHours(hours([[1, 1], [2, 2], [3, 4], [9, 8]]), 2, 3);
+  assert.equal(totals.total, 6);
+  assert.equal(totals.messages, 2);
+});
+
+test("sumHours de un rango sin actividad da ceros", () => {
+  assert.equal(sumHours(hours([[1, 1]]), 5, 9).total, 0);
+});
+
+test("el snapshot trae la sesión en curso y la ventana semanal", () => {
+  const root = fakeRoot();
+  const file = path.join(root, "-un-proyecto", "sesion.jsonl");
+  fs.writeFileSync(file, line("a", { input_tokens: 6 }, new Date().toISOString()));
+
+  const tracker = createTracker({ root, pollMs: 0 });
+  const snap = tracker.start();
+  tracker.stop();
+
+  assert.equal(snap.session.active, true);
+  assert.equal(snap.session.total, 6);
+  assert.equal(snap.weekly.total, 6);
+  assert.equal(snap.blockHours, 5);
 });

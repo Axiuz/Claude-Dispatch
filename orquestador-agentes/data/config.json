@@ -6,5 +6,7 @@
   "max_parallel": 2,
   "stall_timeout_ms": 90000,
   "run_timeout_ms": 600000,
-  "max_prompt_chars": 16000
+  "max_prompt_chars": 16000,
+  "claude_session_limit": 100000000,
+  "claude_weekly_limit": 600000000
 }
