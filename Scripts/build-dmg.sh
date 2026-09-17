@@ -62,9 +62,20 @@ install -m 755 "$ROOT/macos/launcher.sh" "$RES/launcher.sh"
 echo "→ Copiando el servidor y sus dependencias"
 mkdir -p "$RES/app"
 # pnpm-workspace.yaml autoriza el postinstall de node-pty (la terminal del panel)
-# Los módulos que server.js requiere: si falta uno, la app abre y muere sola
-cp -R "$SRC/server.js" "$SRC/codegraph.js" "$SRC/kanban.js" "$SRC/safepath.js" \
+# Todos los .js de la raíz, no una lista a mano: cada módulo nuevo que se olvidara
+# hacía que la app abriera y muriera sola con un Cannot find module
+cp -R "$SRC"/*.js \
   "$SRC/package.json" "$SRC/pnpm-lock.yaml" "$SRC/pnpm-workspace.yaml" "$SRC/public" "$RES/app/"
+
+# Red de seguridad: que no salga un bundle al que le falte un require
+missing=""
+for mod in $(grep -oE 'require\("\./[a-zA-Z0-9_-]+"\)' "$RES/app/server.js" | sed -E 's/require\("\.\/(.*)"\)/\1/' | sort -u); do
+  [ -f "$RES/app/$mod.js" ] || missing="$missing $mod.js"
+done
+if [ -n "$missing" ]; then
+  echo "Faltan módulos en el bundle:$missing" >&2
+  exit 1
+fi
 # Solo los valores por defecto: projects.json lleva rutas reales y no viaja en la app
 mkdir -p "$RES/app/data"
 cp "$SRC/data/agents.json" "$SRC/data/config.json" "$RES/app/data/"
