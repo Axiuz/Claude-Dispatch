@@ -130,16 +130,30 @@ este repo como plantilla).
 | **Conexión** | Instrucciones para `CLAUDE.md`, URL de LM Studio, modelo y paralelismo |
 
 El carril izquierdo lista los proyectos recientes (con su rama de git) y el
-derecho muestra la terminal, el estado de cada agente, métricas (tareas hoy,
-tiempo medio, tasa de error, tokens) y una gráfica de runs de las últimas 24 h.
+derecho muestra la terminal, el estado de cada agente, los tokens que gasta
+Claude Code y el control de código de la carpeta abierta.
 
-**El KPI TOKENS CLAUDE es el gasto real de Claude Code**, no una estimación: sale
+**La tarjeta de control de código** es lo que enseña VS Code en su barra lateral,
+recortado a lo que cabe en el carril: la rama, cuántos commits te faltan por
+subir o por traer, los archivos que tienes tocados (un clic los abre en el
+Editor) y los últimos commits, con los que aún no están en el remoto marcados
+como "sin subir".
+
+Y desde ahí mismo se trabaja: el nombre de la rama abre el selector —las locales
+con su ahead/behind, las remotas que todavía no tienes y "crear rama nueva"—, el
+`+` de cada archivo lo prepara, y la caja de mensaje lleva el botón dividido de
+siempre: **Commit**, **Commit (Amend)**, **Commit & Push** y **Commit & Sync**.
+Sin nada preparado, el commit toma todos los cambios rastreados, y te lo pregunta
+antes. Lo que git conteste, bien o mal, se enseña tal cual. Los diffs y los
+conflictos siguen siendo cosa de la terminal.
+
+**Los tokens de Claude Code son su gasto real**, no una estimación: salen
 de los transcripts que el propio Claude Code escribe en `~/.claude/projects`, de
 donde se lee el `usage` que devolvió la API. Debajo, la tarjeta de desglose
 reparte el día en entrada, salida y caché, y dice cuántas sesiones han escrito
 hoy y cuántas siguen activas. Se actualiza en cuanto Claude Code responde, sin
-recargar nada. Los tokens de los agentes locales van aparte, en **TOKENS
-AGENTES**, y esos sí son una estimación por longitud.
+recargar nada. Los tokens de los agentes locales no salen aquí: se ven en cada
+run, y esos sí son una estimación por longitud.
 
 ### Agentes incluidos
 
@@ -311,8 +325,19 @@ GET    /api/files/read?path=       {content, size, mtimeMs}
 POST   /api/files/write            {path, content}
 POST   /api/files/stat             {paths: []} — fechas de los archivos abiertos
 
+GET    /api/git?path=&refresh=     rama, archivos cambiados y últimos commits
+GET    /api/git/branches?path=     ramas locales y remotas, con ahead/behind
+POST   /api/git/checkout           {path, branch, create?, track?}
+POST   /api/git/stage              {path, files?, all?}
+POST   /api/git/unstage            {path, files?, all?}
+POST   /api/git/commit             {path, message, amend?, all?, then?: push|sync}
+POST   /api/git/remote             {path, action: push|pull|sync}
+GET    /api/git/plan?path=         plan de commits del repositorio
+POST   /api/git/plan               {path, text} o {path, commits: []}
+DELETE /api/git/plan               {path, index?} — un commit o el plan entero
+
 GET    /api/terminals
-POST   /api/terminals              {path, cols, rows}
+POST   /api/terminals              {path, kind, cols, rows} — kind: claude | shell
 GET    /api/terminals/:id/stream   SSE: buffer, data, exit
 POST   /api/terminals/:id/input    {data}
 POST   /api/terminals/:id/resize   {cols, rows}
@@ -366,12 +391,66 @@ quedan `node_modules`, `.git`, los archivos de más de 2 MB y los binarios. Si
 Claude Code cambia un archivo que tienes abierto y tú no lo has tocado, se recarga
 solo sin moverte el cursor; si lo tenías a medio editar, te avisa y no lo pisa.
 
-### La terminal
+### Las terminales
 
-La sesión de Claude Code vive en el carril derecho, encima de la lista de agentes,
-así que la ves desde cualquier pestaña mientras trabajas. Se puede plegar y
-estirar. Al abrir la pestaña **Sesión** la misma terminal se muda al panel grande:
-es una sola instancia, no una copia.
+Son dos, y son distintas. La **sesión de Claude Code** ocupa la pestaña **Sesión**
+a tamaño completo: se arranca sola al abrir un proyecto, con las instrucciones del
+orquestador ya puestas. La **shell del dock** vive en el carril derecho y se ve
+desde cualquier pestaña, para comandos sueltos; se pliega y se estira, y se crea
+cuando la pides.
+
+El dock sigue siempre a la carpeta de la sesión activa. Cada carpeta puede tener
+una de cada tipo, las dos siguen vivas en el servidor aunque cambies de proyecto,
+y al volver se reproduce el scrollback.
+
+---
+
+## Control de código
+
+La tarjeta **Control de código** vive en el carril derecho, debajo de la terminal
+del dock: la barra lateral de Git de VS Code reducida a un carril. Muestra la rama
+actual, la caja del mensaje con el botón dividido de commit, los archivos
+preparados y sin preparar, los últimos commits y el plan de commits.
+
+Sigue siempre a la carpeta que tiene delante el dock y se repregunta cada 5
+segundos, solo mientras la pestaña está visible: Git cambia por fuera del panel
+—Claude Code, la terminal, otro editor— y no hay ningún evento que avise.
+
+Desde ahí se cambia de rama, se crea una, se saca una remota, se preparan y se
+quitan archivos del stage, se commitea (normal, `--amend`, con push o con sync) y
+se hace pull o push suelto. Un clic en un archivo de la lista lo abre en el
+Editor. Lo que no está —diffs, conflictos, rebase, tags y stash— se sigue haciendo
+en la terminal.
+
+### Plan de commits
+
+Al cerrar una tarea, Claude Code le pide al agente **documenter** que agrupe en
+commits los archivos que tocó y manda el resultado al panel con
+`POST /api/git/plan`. Aparece dentro de la tarjeta como una lista, un renglón por
+commit, con su título y sus archivos. Cada renglón trae tres botones:
+
+- **＋** prepara sus archivos y escribe su mensaje en la caja.
+- **✓** prepara y commitea; el commit ejecutado desaparece de la lista.
+- **✕** lo quita del plan.
+
+El plan también se pega a mano: el botón **pegar** abre un área de texto donde van
+los bloques tal cual los devolvió el documenter.
+
+```
+COMMIT 1
+ARCHIVOS: src/auth/login.js, src/auth/perfil.js
+MENSAJE: corrige el flujo de autenticación
+FIN
+```
+
+El parseo es tolerante a propósito —acepta numeración, viñetas, comas, bloques de
+código y que falte el `FIN`— porque el documenter corre en un modelo de 4B y
+repegar el plan por una viñeta de más no tiene sentido. Lo que no se negocia son
+las rutas: van a `git add`, así que se filtran igual que las del resto del panel.
+
+Se guarda uno por repositorio en `data/commitplans.json`, ignorado por git porque
+lleva rutas reales y trabajo sin commitear. Claude Dispatch nunca commitea solo:
+cada commit es un clic tuyo.
 
 ---
 
@@ -398,10 +477,15 @@ orquestador-agentes/          raíz del repo
     server.js                 backend completo
     codegraph.js              escáner estático para el mapa de código
     kanban.js                 columnas del tablero y colocación de tarjetas
+    git.js                    estado y operaciones de Git de una carpeta
+    commitplan.js             parser del plan de commits del documenter
+    claudeusage.js            tokens que gasta Claude Code, leídos de sus transcripts
     safepath.js               contención de rutas del editor
     public/                   panel: index.html, styles.css, app.js, graph.js, editor.js
-    data/                     agents.json, config.json (y plan.json, projects.json)
-    test/                     tests del escáner, el tablero y las rutas (pnpm test)
+    data/                     agents.json, config.json (y plan.json, projects.json,
+                              commitplans.json, los tres ignorados por git)
+    test/                     tests del escáner, el tablero, las rutas, Git y el
+                              plan de commits (pnpm test)
     dev/mock-lmstudio.js      simulador de LM Studio
   macos/
     ClaudeDispatch.swift      ventana nativa (WKWebView), portapapeles y selector de carpeta
@@ -418,12 +502,16 @@ orquestador-agentes/          raíz del repo
   cuando un nombre existe en varios archivos y no hay import que lo desempate, la
   arista se marca como dudosa y se dibuja punteada.
 - Un solo plan a la vez: registrar otro pisa el anterior.
-- La cola es global y sin prioridades: un lote largo retrasa a la delegación que
-  llegue después.
+- La cola es por modelo y sin prioridades dentro de cada una: con un solo modelo
+  cargado hay un solo carril, y un lote largo retrasa a la delegación que llegue
+  después.
 - Los runs y las métricas viven en memoria; reiniciar los borra. El tablero no:
   se guarda en `data/plan.json`.
 - El editor abre, edita y guarda, pero no crea ni borra archivos, y no muestra
   el estado de Git.
+- La tarjeta de Git cambia de rama, prepara archivos y commitea, pero no enseña
+  diffs ni resuelve conflictos: un merge con conflictos, un rebase, un stash o un
+  push forzado se siguen haciendo en la terminal.
 - El conteo de tokens de los agentes locales es una estimación. El de Claude Code
   es real, pero sale de sus archivos: solo se leen los últimos 7 días y, si los
   borras, el histórico se va con ellos.

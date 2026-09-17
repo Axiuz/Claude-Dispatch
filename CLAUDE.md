@@ -144,14 +144,46 @@ El agente **coder** es tu refuerzo solo cuando hay demasiado código que escribi
   patrón. El coder rellena; tú revisas e integras.
 - Si es menos que eso, o requiere entender el proyecto, lo escribes tú.
 
+## Los comentarios no los escribes tú
+
+Escribe el código sin comentarios y sin docstrings. Ni de cabecera, ni por
+función, ni al final de una línea. Los redacta el **documenter** cuando cierras la
+tarea, y escribirlos tú es pagar dos veces por el mismo texto: primero tu salida
+al escribirlos y luego la suya al rehacerlos.
+
+Se salva una sola cosa: la decisión que no se deduce leyendo el código. Por qué
+este parseo es tolerante, por qué este orden y no otro, qué rompe si se cambia.
+Eso no puede saberlo el documenter, así que esa línea la escribes tú. Si dudas,
+no la escribas: ya la añadirás al revisar lo que él proponga.
+
 ## Uso de agentes por defecto
 
 - **tester:** si escribiste o cambiaste lógica, pídele los tests unitarios de esa
   lógica. Revísalos y ajústalos tú antes de integrarlos.
 - **revisión:** la haces tú, que sí ves el repo completo. El agente reviewer está
   desactivado; repasa tu propio diff antes de dar la tarea por terminada.
-- **documenter:** si hay que documentar, tú escribes el resumen de hechos (qué se
-  hizo, por qué, archivos, API) y él redacta. Tú revisas e integras.
+- **documenter:** al cerrar la tarea, antes de reportarme, mándale el código que
+  escribiste o cambiaste y pídele los comentarios. Responde en bloques
+  ARCHIVO / ANCLA / COMENTARIO / FIN: la ANCLA es una línea copiada de tu código y
+  el comentario va justo encima de ella, con un edit puntual. Mándale solo las
+  funciones, no el archivo entero: lo que no ve no lo comenta, y tiende a comentar
+  constantes e imports si se los enseñas. Para la cabecera de un archivo nuevo,
+  pídesela aparte y dile de qué va el módulo: responde ARCHIVO / CABECERA / FIN,
+  sin ANCLA. Un bloque sin ANCLA que no sea una CABECERA es ruido suyo: descártalo.
+  Pega lo que devuelva tal cual, sin reescribirlo para que suene como tú;
+  complementa lo que falte, corrige lo que esté mal y borra lo que sobre. Lo mismo
+  con READMEs y secciones: los redacta él, tú los revisas.
+- **plan de commits:** al terminar, mándale al documenter "PLAN DE COMMITS" y la
+  lista de archivos que tocaste, uno por línea, con qué cambió en cada uno.
+  Contesta en bloques COMMIT / ARCHIVOS / MENSAJE / FIN. Pásamelo tal cual, con
+  las rutas que él dio, y déjamelo puesto en el panel:
+  ```bash
+  curl -s -X POST http://localhost:3131/api/git/plan \
+    -H "Content-Type: application/json" \
+    -d '{"path":"<ruta del repo>","text":"<los bloques tal cual>"}'
+  ```
+  Aparece en **Control de código** y desde ahí preparo y commiteo cada uno. No
+  commitees nada: los commits los ejecuto yo.
 - **explainer:** opcional, para resumir código ajeno cuando necesites orientarte.
 
 Excepciones, las únicas válidas para saltarte un agente:
@@ -168,9 +200,12 @@ material es grande, pártelo en trozos de ~300 líneas o pásale tu resumen.
 Nunca delegues decisiones de arquitectura ni la implementación de seguridad,
 auth o credenciales (sí puedes pedir revisión).
 
-La terminal del panel de Claude Dispatch es una shell normal: si abres Claude
-Code ahí dentro, necesita estas instrucciones igual que en cualquier otro sitio.
-Cópialas de la pestaña **Conexión** al `CLAUDE.md` del proyecto.
+La pestaña **Sesión** del panel de Claude Dispatch arranca Claude Code con estas
+instrucciones ya puestas (`--append-system-prompt`): ahí dentro no hace falta
+copiar nada. El dock del carril derecho es otra terminal distinta, una shell
+pelada para comandos sueltos; si abres Claude Code ahí, necesita estas
+instrucciones igual que en cualquier otro sitio, y las copias de la pestaña
+**Conexión** al `CLAUDE.md` del proyecto.
 
 ## Antes de empezar
 
