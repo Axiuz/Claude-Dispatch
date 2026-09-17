@@ -124,9 +124,11 @@ button { font-family: inherit; }
 }
 .status-pill.ok { color: var(--text-2); font-family: var(--mono); }
 .status-pill.bad { color: var(--red); background: var(--red-soft); border-color: var(--red-line); }
+.status-pill.warn { color: var(--amber); background: var(--amber-soft); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
 .dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
 .dot.bad { background: var(--red); animation: glow 1.6s infinite; }
+.dot.warn { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
 
 .eyebrow { font-size: 10.5px; letter-spacing: 0.8px; color: var(--faint); font-weight: 600; }
 .eyebrow.spaced { margin-top: 6px; }
@@ -293,6 +295,8 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .run-item.running { border-left-color: var(--accent); }
 .run-item.done { border-left-color: var(--green); }
 .run-item.error { border-left-color: var(--red); }
+.run-item.cancelled { border-left-color: var(--faint); }
+.run-item.queued { border-left-color: var(--amber); }
 
 .run-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .run-agent { font-size: 12.5px; font-weight: 600; }
@@ -323,6 +327,7 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 /* Mientras escribe se muestra el final del texto, sin degradado que tape lo último */
 .run-stream.tail::after { display: none; }
 .run-stream.thinking { color: var(--faint); font-style: italic; }
+.run-stream.waiting { color: var(--amber); font-style: italic; }
 
 /* ---------- En vivo ---------- */
 .live-empty { flex: 1; }
@@ -340,6 +345,9 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .live-pane.running { border-top-color: var(--accent); }
 .live-pane.done { border-top-color: var(--green); }
 .live-pane.error { border-top-color: var(--red); }
+.live-pane.cancelled { border-top-color: var(--faint); }
+.live-pane.queued { border-top-color: var(--amber); }
+.live-pane.queued .live-output { opacity: 0.55; }
 
 .live-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .live-state {
@@ -349,8 +357,11 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .live-pane.running .live-state { background: var(--accent-soft); color: var(--accent); }
 .live-pane.done .live-state { background: var(--green-soft); color: var(--green); }
 .live-pane.error .live-state { background: var(--red-soft); color: var(--red); }
+.live-pane.queued .live-state { background: var(--amber-soft); color: var(--amber); }
 .live-pane .run-time { flex: none; }
 .live-open { flex: none; }
+.live-cancel { flex: none; color: var(--faint); }
+.live-cancel:hover { color: var(--red); }
 
 .live-prompt { font-size: 11.5px; color: var(--muted); }
 .live-prompt summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -534,6 +545,7 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .reach { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 11px; }
 .reach.ok { color: var(--green); }
 .reach.bad { color: var(--red); }
+.reach.warn { color: var(--amber); }
 
 .segmented { display: flex; gap: 7px; }
 .segmented button {

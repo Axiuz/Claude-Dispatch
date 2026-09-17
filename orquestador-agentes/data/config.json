@@ -3,5 +3,8 @@
   "model": "omnicoder-9b",
   "app_port": 3131,
   "max_runs_kept": 300,
-  "max_parallel": 4
+  "max_parallel": 1,
+  "stall_timeout_ms": 90000,
+  "run_timeout_ms": 600000,
+  "max_prompt_chars": 16000
 }

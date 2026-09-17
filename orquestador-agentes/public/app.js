@@ -12,10 +12,15 @@ const agentState = {}; // id -> {status, taskLabel, lastDuration, count}
 
 let activeSessionId = null;
 let consoleAgentId = null;
-let selectedParallel = 4;
+let selectedParallel = 1;
+// Cuántas delegaciones corren y cuántas esperan turno, según el servidor
+let queueInfo = { active: 0, queued: 0, max_parallel: 1 };
 const expandedAgents = new Set();
 
 const PARALLEL_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8];
+
+// Un run espera turno ("queued") antes de correr: las dos cuentan como activas
+const isActive = (run) => run.status === "queued" || run.status === "running";
 const WIDE_TABS = ["vivo", "mapa", "agentes", "consola", "conexion"];
 
 // ================= API =================
@@ -163,7 +168,14 @@ function connectStream() {
 
     const st = agentState[updated.agentId] || {};
     setAgentState(updated.agentId, {
-      status: updated.status === "error" ? "error" : "idle",
+      status:
+        updated.status === "running"
+          ? "working"
+          : updated.status === "queued"
+          ? "queued"
+          : updated.status === "error"
+          ? "error"
+          : "idle",
       taskLabel: st.taskLabel,
       lastDuration: updated.durationMs,
       count: (st.count || 0) + (updated.status === "done" ? 1 : 0),
@@ -196,6 +208,11 @@ function connectStream() {
     renderConsoleAgents();
     renderLive();
     renderInstructions();
+  });
+
+  es.addEventListener("queue:updated", (e) => {
+    queueInfo = JSON.parse(e.data);
+    renderKpis();
   });
 
   es.addEventListener("runs:cleared", () => {
@@ -239,8 +256,11 @@ function setAgentState(id, patch) {
 function rebuildAgentState() {
   [...runs].reverse().forEach((run) => {
     const st = agentState[run.agentId] || {};
-    if (run.status === "running") {
-      setAgentState(run.agentId, { status: "working", taskLabel: run.meta?.task_label || truncate(run.prompt, 60) });
+    if (isActive(run)) {
+      setAgentState(run.agentId, {
+        status: run.status === "running" ? "working" : "queued",
+        taskLabel: run.meta?.task_label || truncate(run.prompt, 60),
+      });
     } else {
       setAgentState(run.agentId, {
         status: run.status === "error" ? "error" : "idle",
@@ -597,10 +617,11 @@ function renderAgents() {
 // ================= Render: KPIs y gráfica de 24 h =================
 function renderKpis() {
   const today = new Date().toDateString();
-  const finished = runs.filter((r) => r.status !== "running");
+  const finished = runs.filter((r) => !isActive(r) && r.status !== "cancelled");
   const done = runs.filter((r) => r.status === "done");
   const errors = runs.filter((r) => r.status === "error");
   const running = runs.filter((r) => r.status === "running").length;
+  const queued = runs.filter((r) => r.status === "queued").length;
   const todayCount = runs.filter((r) => new Date(r.startedAt).toDateString() === today).length;
   const avgMs = done.length ? done.reduce((sum, r) => sum + (r.durationMs || 0), 0) / done.length : null;
   const tokens = done.reduce((sum, r) => sum + (r.tokensApprox || 0), 0);
@@ -615,7 +636,12 @@ function renderKpis() {
       sub: `${errors.length} de ${finished.length} runs`,
     },
     { label: "TOKENS", value: done.length ? `~${formatCount(tokens)}` : null, sub: "estimados" },
-    { label: "EN CURSO", value: running, sub: `máx. ${config.max_parallel || 4} en paralelo`, always: true },
+    {
+      label: "EN CURSO",
+      value: running,
+      sub: queued ? `${queued} en cola · máx. ${maxParallel()} a la vez` : `máx. ${maxParallel()} a la vez`,
+      always: true,
+    },
     { label: "SESIONES", value: liveSessions, sub: "de Claude Code", always: true },
   ];
 
@@ -676,7 +702,9 @@ function renderTimeline() {
       </div>
       <div class="run-prompt">Tarea: <span>${escapeHtml(truncate(run.prompt, 160))}</span></div>
       ${
-        run.status === "error"
+        run.status === "queued"
+          ? '<div class="run-stream waiting">En cola, esperando turno…</div>'
+          : run.status === "error" || run.status === "cancelled"
           ? `<div class="run-stream error-text">${escapeHtml(run.error || "")}</div>`
           : run.status === "running"
           ? `<div class="run-stream tail" data-stream="${run.id}"></div>`
@@ -710,18 +738,20 @@ function updateRunStream(run) {
 // Un panel por run: todos los que están en curso y, en los huecos que queden
 // hasta el límite de paralelismo, las últimas respuestas terminadas.
 function liveRuns() {
-  const slots = config.max_parallel || 4;
-  const running = runs.filter((r) => r.status === "running");
-  const finished = runs.filter((r) => r.status !== "running").slice(0, Math.max(slots - running.length, 0));
-  const shown = new Set([...running, ...finished]);
+  const slots = Math.max(maxParallel(), 2);
+  const active = runs.filter(isActive);
+  const finished = runs.filter((r) => !isActive(r)).slice(0, Math.max(slots - active.length, 0));
+  const shown = new Set([...active, ...finished]);
   return runs.filter((r) => shown.has(r));
 }
+
+const maxParallel = () => queueInfo.max_parallel || config.max_parallel || 1;
 
 function renderLive() {
   const grid = $("#liveGrid");
   const list = liveRuns();
-  const running = runs.filter((r) => r.status === "running").length;
-  $("#liveCount").textContent = running ? String(running) : "";
+  const active = runs.filter(isActive).length;
+  $("#liveCount").textContent = active ? String(active) : "";
   $("#liveEmpty").hidden = list.length > 0;
 
   // Reutilizar los paneles que ya existen: recrearlos perdería el scroll y el
@@ -746,6 +776,7 @@ function createLivePane(run) {
       <span class="live-label"></span>
       <span class="live-state"></span>
       <span class="run-time" data-elapsed="${run.id}"></span>
+      <button class="link-btn live-cancel" title="Cancelar">✕</button>
       <button class="link-btn live-open" title="Ver detalle">⤢</button>
     </div>
     <details class="live-prompt">
@@ -755,6 +786,7 @@ function createLivePane(run) {
     <div class="live-output"><div class="reasoning"></div><span class="live-text"></span><span class="cursor"></span></div>
   `;
   pane.querySelector(".live-open").addEventListener("click", () => openRunModal(run.id));
+  pane.querySelector(".live-cancel").addEventListener("click", () => cancelRun(run.id));
   return pane;
 }
 
@@ -767,6 +799,7 @@ function updateLivePane(pane, run) {
   label.className = `live-label ${run.meta?.task_label ? "run-badge" : ""}`;
   label.textContent = run.meta?.task_label || "";
   pane.querySelector(".live-state").textContent = liveStateText(run);
+  pane.querySelector(".live-cancel").hidden = !isActive(run);
   updateElapsed(pane.querySelector("[data-elapsed]"), run);
 
   const out = pane.querySelector(".live-output");
@@ -782,8 +815,17 @@ function updateLivePane(pane, run) {
 function liveStateText(run) {
   if (run.status === "done") return "hecho";
   if (run.status === "error") return "error";
+  if (run.status === "cancelled") return "cancelado";
+  if (run.status === "queued") return "en cola";
   if (run.response) return "escribiendo";
   return run.reasoning ? "pensando" : "esperando al modelo";
+}
+
+// Aborta el stream en el servidor; el run vuelve por SSE como "cancelled"
+async function cancelRun(id) {
+  try {
+    await fetch(`/api/runs/${id}`, { method: "DELETE" });
+  } catch (_) {}
 }
 
 function updateElapsed(el, run) {
@@ -1079,11 +1121,12 @@ async function refreshStatus() {
     lastStatus = data;
     config = { ...config, ...data.config };
     if (data.reachable) {
-      pill.className = "status-pill ok";
-      $("#statusDot").className = "dot ok";
-      $("#statusText").textContent = `${data.config.model} · en línea`;
-      reach.className = "reach ok";
-      reach.textContent = "✓ responde";
+      if (data.queue) queueInfo = data.queue;
+      pill.className = data.warning ? "status-pill warn" : "status-pill ok";
+      $("#statusDot").className = data.warning ? "dot warn" : "dot ok";
+      $("#statusText").textContent = data.warning || `${data.config.model} · en línea`;
+      reach.className = data.warning ? "reach warn" : "reach ok";
+      reach.textContent = data.warning ? "⚠ sin modelo" : "✓ responde";
       $("#infoModels").textContent = data.models?.length ? data.models.join(", ") : "ninguno cargado";
     } else {
       pill.className = "status-pill bad";
@@ -1124,7 +1167,7 @@ async function loadConfig() {
   config = await res.json();
   $("#cfgLmUrl").value = config.lmstudio_url;
   $("#cfgModel").value = config.model;
-  selectedParallel = config.max_parallel || 4;
+  selectedParallel = config.max_parallel || 1;
   $("#infoPort").textContent = `:${config.app_port || 3131}`;
   renderParallel();
   renderInstructions();

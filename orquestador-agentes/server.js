@@ -56,13 +56,15 @@ function createRun({ agentId, prompt, source, meta }) {
     source: source || "desconocido",
     meta: meta || {},
     stepId: meta?.step_id || null,
-    status: "running",
+    // Nace en cola: pasa a "running" cuando le toca turno (ver takeSlot)
+    status: "queued",
     response: "",
     reasoning: "",
     error: null,
     startedAt: new Date().toISOString(),
     finishedAt: null,
     durationMs: null,
+    queuedMs: null,
     tokensApprox: null,
   };
   runs.unshift(run);
@@ -77,7 +79,7 @@ function createRun({ agentId, prompt, source, meta }) {
 
 function updateRun(run, patch) {
   Object.assign(run, patch);
-  if (run.stepId && (run.status === "done" || run.status === "error")) {
+  if (run.stepId && ["done", "error", "cancelled"].includes(run.status)) {
     setStepStatus(run.stepId, run.status === "done" ? "done" : "error", {
       runId: run.id,
       durationMs: run.durationMs,
@@ -274,27 +276,154 @@ const clampSize = (n, fallback) => {
   return Number.isFinite(v) && v >= 2 && v <= 1000 ? v : fallback;
 };
 
+// ============ Cola de delegaciones ============
+// LM Studio sirve un modelo a la vez: mandarle varias peticiones juntas no las
+// hace más rápidas, multiplica el KV cache y en 16 GB unificados acaba en swap.
+// Las delegaciones piden turno aquí; la que no lo consigue espera en "queued" y
+// entra cuando otra termina.
+const RUN_DEFAULTS = {
+  max_parallel: 1,
+  stall_timeout_ms: 90000, // sin recibir un solo token del modelo
+  run_timeout_ms: 600000, // tope duro por run, por si el modelo entra en bucle
+  max_prompt_chars: 16000, // ~4000 tokens: deja sitio a la respuesta en 8192 de contexto
+};
+const CANCELLED = "Cancelado desde el panel";
+const MAX_BATCH = 12; // tareas por lote en /delegate; la cola las sirve de a max_parallel
+
+// Todos estos valores viven en config.json y se pueden cambiar desde el panel
+const setting = (key) => (Number(config[key]) > 0 ? Number(config[key]) : RUN_DEFAULTS[key]);
+
+let activeRuns = 0;
+const queue = [];
+// Lo que está corriendo o esperando turno, para poder cancelarlo por id
+const inFlight = new Map();
+
+const queueState = () => ({ active: activeRuns, queued: queue.length, max_parallel: setting("max_parallel") });
+const broadcastQueue = () => broadcast("queue:updated", queueState());
+
+// Devuelve null si hay turno libre, o un ticket que se resuelve cuando lo haya
+function takeSlot() {
+  if (activeRuns < setting("max_parallel")) {
+    activeRuns++;
+    return null;
+  }
+  const ticket = {};
+  ticket.promise = new Promise((resolve, reject) => {
+    ticket.resolve = resolve;
+    ticket.reject = reject;
+  });
+  queue.push(ticket);
+  return ticket;
+}
+
+// Al terminar un run su turno pasa al primero de la cola, no se libera
+function freeSlot() {
+  const next = queue.shift();
+  if (next) next.resolve();
+  else activeRuns = Math.max(0, activeRuns - 1);
+  broadcastQueue();
+}
+
+// Si se sube max_parallel desde el panel, los que esperan entran en ese momento;
+// si no, no arrancaría ninguno hasta que terminara el run en curso.
+function fillFreeSlots() {
+  while (queue.length && activeRuns < setting("max_parallel")) {
+    activeRuns++;
+    queue.shift().resolve();
+  }
+  broadcastQueue();
+}
+
+function dropFromQueue(ticket) {
+  const i = queue.indexOf(ticket);
+  if (i >= 0) queue.splice(i, 1);
+}
+
+// El prompt entero entra al contexto del modelo: si se pasa, LM Studio lo trunca
+// por dentro o devuelve error. Es mejor rechazarlo aquí y decir por qué.
+function promptTooLong(prompt) {
+  const max = setting("max_prompt_chars");
+  if (typeof prompt !== "string" || prompt.length <= max) return null;
+  return `El prompt tiene ${prompt.length} caracteres y el tope es ${max} (~${Math.round(
+    max / 4
+  )} tokens). Pártelo en trozos o manda un resumen en lugar del archivo entero.`;
+}
+
 // ============ Llamada a LM Studio (con streaming) ============
 async function runAgent({ agent, prompt, source, meta, overrides = {} }) {
   const run = createRun({ agentId: agent.id, prompt, source, meta });
-  const started = Date.now();
+  const controller = new AbortController();
+  const entry = { run, ticket: null, reason: null };
 
-  const body = {
-    model: overrides.model || config.model,
-    messages: [
-      { role: "system", content: agent.system_prompt },
-      { role: "user", content: prompt },
-    ],
-    temperature: overrides.temperature ?? agent.temperature ?? 0.3,
-    max_tokens: overrides.max_tokens ?? agent.max_tokens ?? 1024,
-    stream: true,
+  // fetch() no dice por qué se abortó: el motivo se guarda antes de abortar
+  entry.cancel = (reason) => {
+    entry.reason = reason;
+    if (entry.ticket) {
+      const ticket = entry.ticket;
+      entry.ticket = null;
+      dropFromQueue(ticket);
+      ticket.reject(new Error(reason));
+    }
+    controller.abort();
   };
+  inFlight.set(run.id, entry);
+
+  const queuedAt = Date.now();
+  let started = queuedAt;
+  let hasSlot = false;
+  let stallTimer = null;
+  let totalTimer = null;
 
   try {
+    entry.ticket = takeSlot();
+    if (entry.ticket) {
+      broadcastQueue();
+      await entry.ticket.promise; // se resuelve cuando otro run libera su turno
+      entry.ticket = null;
+    }
+    hasSlot = true;
+    broadcastQueue();
+
+    // El tiempo se cuenta desde que entra al modelo: la espera en cola va aparte
+    started = Date.now();
+    updateRun(run, {
+      status: "running",
+      startedAt: new Date(started).toISOString(),
+      queuedMs: started - queuedAt,
+    });
+
+    const body = {
+      model: overrides.model || config.model,
+      messages: [
+        { role: "system", content: agent.system_prompt },
+        { role: "user", content: prompt },
+      ],
+      temperature: overrides.temperature ?? agent.temperature ?? 0.3,
+      max_tokens: overrides.max_tokens ?? agent.max_tokens ?? 1024,
+      stream: true,
+    };
+
+    const stallMs = Number(agent.stall_timeout_ms) > 0 ? Number(agent.stall_timeout_ms) : setting("stall_timeout_ms");
+    const totalMs = Number(agent.run_timeout_ms) > 0 ? Number(agent.run_timeout_ms) : setting("run_timeout_ms");
+
+    // Dos relojes. El de inactividad se rearma con cada token, así que un run
+    // lento sigue vivo y solo muere el que se quedó colgado; el total es el tope
+    // duro. Sin esto el run se queda en "running" para siempre y ocupa su turno.
+    const armStall = () => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(
+        () => entry.cancel(`LM Studio no envió nada en ${Math.round(stallMs / 1000)} s`),
+        stallMs
+      );
+    };
+    totalTimer = setTimeout(() => entry.cancel(`El run pasó del tope de ${Math.round(totalMs / 1000)} s`), totalMs);
+    armStall();
+
     const res = await fetch(`${config.lmstudio_url}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
 
     if (!res.ok) {
@@ -313,6 +442,7 @@ async function runAgent({ agent, prompt, source, meta, overrides = {} }) {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      armStall();
       buffer += decoder.decode(value, { stream: true });
 
       const lines = buffer.split("\n");
@@ -358,13 +488,21 @@ async function runAgent({ agent, prompt, source, meta, overrides = {} }) {
     return { content: full, durationMs, runId: run.id };
   } catch (err) {
     const durationMs = Date.now() - started;
+    const message = entry.reason || String(err.message || err);
     updateRun(run, {
-      status: "error",
-      error: String(err.message || err),
+      // Cancelar es una decisión, no un fallo: no cuenta en la tasa de error
+      status: entry.reason === CANCELLED ? "cancelled" : "error",
+      error: message,
       finishedAt: new Date().toISOString(),
       durationMs,
     });
-    throw err;
+    throw new Error(message);
+  } finally {
+    clearTimeout(stallTimer);
+    clearTimeout(totalTimer);
+    inFlight.delete(run.id);
+    if (hasSlot) freeSlot();
+    else broadcastQueue();
   }
 }
 
@@ -522,10 +660,13 @@ auth o credenciales (sí puedes pedir revisión).
        -d '{"prompt":"Contexto:\\n<código>\\n\\nTarea:\\n<qué>",
             "task_label":"etiqueta","step_id":"step-2"}'
 
-   En paralelo (máx ${config.max_parallel || 4}):
+   Varios pasos independientes en un solo lote (hasta ${MAX_BATCH}):
      curl -s -X POST http://localhost:${port}/delegate \\
        -H "Content-Type: application/json" \\
        -d '{"tasks":[{"agent":"tester","prompt":"...","step_id":"step-3"}]}'
+   Mándalos todos juntos sin repartirlos tú: el orquestador ejecuta ${setting(
+     "max_parallel"
+   )} a la vez y encola el resto. Más peticiones simultáneas no van más rápido.
 
 4) REVISIÓN — Revisa cada respuesta antes de integrarla: el modelo es pequeño y se
    equivoca más que tú. Si viene mal, corrígela tú; no reenvíes la misma tarea al
@@ -540,6 +681,11 @@ auth o credenciales (sí puedes pedir revisión).
   manifest difiere de "Agentes disponibles", manda el manifest.
   Si "reachable" es false, avísame y sigue sin delegar.
 - Pega el código relevante en el prompt del agente; no describas el archivo.
+- El prompt tiene un tope de ${setting("max_prompt_chars")} caracteres (~${Math.round(
+    setting("max_prompt_chars") / 4
+  )} tokens). Si te pasas recibes un 413: parte el contexto en trozos.
+- Un run sin respuesta del modelo se corta solo y queda como error; no se queda
+  colgado. Si eso pasa, el modelo está saturado: sigue tú y avísame.
 - Incluye siempre "task_label" y "step_id": es lo que veo en mi panel.`;
 }
 
@@ -571,6 +717,8 @@ app.get("/api/manifest", (req, res) => {
       register:
         'POST /api/plan  {"title": "...", "goal": "...", "project": "<ruta absoluta del repo>", "steps": [{"description": "...", "agent": "coder"}]}',
       link_run: 'Al invocar un agente, incluye "step_id": "step-1" en el body',
+      queue: `Las delegaciones se encolan: corren ${setting("max_parallel")} a la vez, hasta ${MAX_BATCH} por lote`,
+      cancel: "DELETE /api/runs/:id — aborta un run en curso o en cola",
       manual_step: 'POST /api/plan/step/{stepId}  {"status": "done", "note": "..."}  — para pasos que haces tú, sin agente',
       clear: "DELETE /api/plan — al terminar",
     },
@@ -592,6 +740,8 @@ app.post("/agent/:id", async (req, res) => {
 
   const { prompt, temperature, max_tokens, task_label, source, step_id } = req.body;
   if (!prompt) return res.status(400).json({ error: "Falta 'prompt' en el body" });
+  const tooLong = promptTooLong(prompt);
+  if (tooLong) return res.status(413).json({ error: tooLong });
 
   try {
     const result = await runAgent({
@@ -614,12 +764,14 @@ app.post("/delegate", async (req, res) => {
     return res.status(400).json({ error: "Envía 'tasks': [{agent, prompt, task_label}]" });
   }
 
-  const limit = config.max_parallel || 4;
-  if (tasks.length > limit) {
-    return res.status(400).json({
-      error: `Máximo ${limit} tareas en paralelo (configurable en data/config.json)`,
-    });
+  if (tasks.length > MAX_BATCH) {
+    return res.status(400).json({ error: `Máximo ${MAX_BATCH} tareas por lote` });
   }
+  const tooLong = tasks.map((t) => promptTooLong(t.prompt)).find(Boolean);
+  if (tooLong) return res.status(413).json({ error: tooLong });
+
+  // Se aceptan todas: la cola las sirve de a max_parallel, así que el Mac nunca
+  // ve más peticiones de las que aguanta aunque el lote sea grande.
 
   const results = await Promise.allSettled(
     tasks.map((t) => {
@@ -649,7 +801,15 @@ app.get("/api/status", async (req, res) => {
     const r = await fetch(`${config.lmstudio_url}/v1/models`, { signal: AbortSignal.timeout(3000) });
     if (!r.ok) throw new Error(`status ${r.status}`);
     const data = await r.json();
-    res.json({ reachable: true, models: (data.data || []).map((m) => m.id), config });
+    const models = (data.data || []).map((m) => m.id);
+    // LM Studio responde aunque no tenga nada cargado: sin esto el panel dice
+    // que todo va bien y las delegaciones fallan una a una.
+    const warning = !models.length
+      ? "LM Studio responde pero no tiene ningún modelo cargado"
+      : config.model && !models.includes(config.model)
+      ? `El modelo '${config.model}' no está cargado. Cargados: ${models.join(", ")}`
+      : null;
+    res.json({ reachable: true, models, model_loaded: models.length > 0, warning, queue: queueState(), config });
   } catch (err) {
     res.json({ reachable: false, error: String(err.message || err), config });
   }
@@ -757,6 +917,13 @@ app.get("/api/runs/:id", (req, res) => {
   if (!run) return res.status(404).json({ error: "Run no encontrado" });
   res.json(run);
 });
+// Aborta el stream (o saca de la cola) y deja el run como cancelado
+app.delete("/api/runs/:id", (req, res) => {
+  const entry = inFlight.get(req.params.id);
+  if (!entry) return res.status(404).json({ error: "Ese run ya no está en curso" });
+  entry.cancel(CANCELLED);
+  res.json({ ok: true });
+});
 app.delete("/api/runs", (req, res) => {
   runs = [];
   broadcast("runs:cleared", {});
@@ -767,6 +934,8 @@ app.delete("/api/runs", (req, res) => {
 app.post("/api/test", async (req, res) => {
   const agent = findAgent(req.body.agentId);
   if (!agent) return res.status(400).json({ error: "Agente desconocido" });
+  const tooLong = promptTooLong(req.body.prompt);
+  if (tooLong) return res.status(413).json({ error: tooLong });
   try {
     const result = await runAgent({
       agent,
@@ -908,6 +1077,7 @@ app.get("/api/config", (req, res) => res.json(config));
 app.post("/api/config", (req, res) => {
   config = { ...config, ...req.body };
   saveJSON(CONFIG_PATH, config);
+  fillFreeSlots();
   res.json(config);
 });
 
