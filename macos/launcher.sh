@@ -1,15 +1,18 @@
 #!/bin/bash
-# Lanzador de Dispatch.app. Lo invoca la app nativa (Dispatch.swift):
+# Lanzador de Singularity.app. Lo invoca la app nativa (Singularity.swift):
 #   launcher.sh start   arranca LM Studio y el orquestador; imprime la URL del panel
 #   launcher.sh stop    detiene el orquestador y el servidor de LM Studio
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$HERE/app"
-DATA_DIR="$HOME/Library/Application Support/Dispatch"
-LOG_DIR="$HOME/Library/Logs/Dispatch"
-OLD_DATA_DIR="$HOME/Library/Application Support/Claude Dispatch"
-OLD_LOG_DIR="$HOME/Library/Logs/Claude Dispatch"
+DATA_DIR="$HOME/Library/Application Support/Singularity"
+LOG_DIR="$HOME/Library/Logs/Singularity"
+# Los nombres por los que ha pasado la app, del más reciente al más viejo: se
+# migra desde el primero que exista, así que quien venga de cualquier versión
+# conserva sus agentes, su config y su tablero.
+OLD_DATA_DIRS=("$HOME/Library/Application Support/Dispatch" "$HOME/Library/Application Support/Claude Dispatch")
+OLD_LOG_DIRS=("$HOME/Library/Logs/Dispatch" "$HOME/Library/Logs/Claude Dispatch")
 PID_FILE="$DATA_DIR/orquestador.pid"
 
 # Las apps abiertas desde Finder no heredan el PATH de la terminal
@@ -17,8 +20,12 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.lmstudio/bin:$PATH"
 NVM_NODE="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1)"
 [ -n "$NVM_NODE" ] && export PATH="$PATH:$NVM_NODE"
 
-[ -d "$OLD_DATA_DIR" ] && [ ! -d "$DATA_DIR" ] && mv "$OLD_DATA_DIR" "$DATA_DIR"
-[ -d "$OLD_LOG_DIR" ] && [ ! -d "$LOG_DIR" ] && mv "$OLD_LOG_DIR" "$LOG_DIR"
+for old in "${OLD_DATA_DIRS[@]}"; do
+  [ -d "$old" ] && [ ! -d "$DATA_DIR" ] && mv "$old" "$DATA_DIR" && break
+done
+for old in "${OLD_LOG_DIRS[@]}"; do
+  [ -d "$old" ] && [ ! -d "$LOG_DIR" ] && mv "$old" "$LOG_DIR" && break
+done
 mkdir -p "$DATA_DIR" "$LOG_DIR"
 
 fail() {

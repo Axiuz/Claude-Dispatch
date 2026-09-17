@@ -4,7 +4,7 @@ import Cocoa
 import WebKit
 
 // El servidor solo sirve el panel a clientes con este user agent
-let appUserAgent = "DispatchApp"
+let appUserAgent = "SingularityApp"
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMessageHandler {
   var window: NSWindow!
@@ -78,12 +78,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScript
       contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
       backing: .buffered, defer: false)
-    window.title = "Dispatch"
+    window.title = "Singularity"
     // Tres columnas (proyectos, centro, agentes) no caben en menos
     window.minSize = NSSize(width: 1000, height: 620)
     window.contentView = webView
     window.center()
-    window.setFrameAutosaveName("DispatchMain")
+    window.setFrameAutosaveName("SingularityMain")
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
   }
@@ -97,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScript
 
   func fatal(_ message: String) {
     let alert = NSAlert()
-    alert.messageText = "No se pudo arrancar Dispatch"
+    alert.messageText = "No se pudo arrancar Singularity"
     alert.informativeText = message
     alert.alertStyle = .critical
     alert.runModal()
@@ -109,9 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScript
 
     let appItem = NSMenuItem()
     let appMenu = NSMenu()
-    appMenu.addItem(withTitle: "Ocultar Dispatch", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+    appMenu.addItem(withTitle: "Ocultar Singularity", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
     appMenu.addItem(.separator())
-    appMenu.addItem(withTitle: "Salir de Dispatch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    appMenu.addItem(withTitle: "Salir de Singularity", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     appItem.submenu = appMenu
     main.addItem(appItem)
 
