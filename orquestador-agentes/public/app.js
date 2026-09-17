@@ -67,9 +67,9 @@ const KANBAN_COLUMNS = [
   ["progress", "EN PROGRESO", "◐"],
   ["review", "REVISIÓN", "◉"],
   ["done", "HECHO", "✓"],
-  ["approved", "APROBADO", "✓✓"],
+  ["errors", "ERRORES", "⚠"],
 ];
-const DONE_COLUMNS = ["done", "approved"];
+const DONE_COLUMNS = ["done"];
 // Id de la tarjeta que se está arrastrando. Mientras haya una, el tablero no se
 // vuelve a dibujar: un plan:update a media arrastrada la dejaría caer al vacío.
 let draggingId = null;
@@ -130,7 +130,7 @@ function renderPlan() {
 
 // El servidor manda 'column'; los planes guardados de antes solo tenían 'status'
 const columnOf = (step) => step.column || LEGACY_TO_COLUMN[step.status] || "todo";
-const LEGACY_TO_COLUMN = { pending: "todo", queued: "todo", running: "progress", error: "review" };
+const LEGACY_TO_COLUMN = { pending: "todo", queued: "todo", running: "progress", error: "errors", approved: "done" };
 const bySort = (a, b) => (a.sort ?? a.order ?? 0) - (b.sort ?? b.order ?? 0);
 
 // ---- Arrastrar y soltar ----

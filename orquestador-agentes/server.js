@@ -655,8 +655,8 @@ app.use(express.json({ limit: "4mb" }));
 if (process.env.ORQ_APP_ONLY) {
   const isApiPath = (p) => p.startsWith("/api/") || p.startsWith("/agent/") || p === "/delegate";
   app.use((req, res, next) => {
-    if (isApiPath(req.path) || (req.get("user-agent") || "").includes("ClaudeDispatchApp")) return next();
-    res.status(403).type("text").send("El panel del orquestador solo está disponible en la app Claude Dispatch.");
+    if (isApiPath(req.path) || (req.get("user-agent") || "").includes("DispatchApp")) return next();
+    res.status(403).type("text").send("El panel del orquestador solo está disponible en la app Dispatch.");
   });
 }
 app.use(express.static(path.join(__dirname, "public")));
@@ -779,7 +779,7 @@ algo importante, entonces sí lo añades: es una línea, no un archivo comentado
   const sessionNote = project
     ? `
 ## Esta sesión
-Corres dentro de Claude Dispatch, en la carpeta ${project}.
+Corres dentro de Dispatch, en la carpeta ${project}.
 Cuando registres un plan usa "project": "${project}".
 `
     : "";
@@ -834,10 +834,10 @@ auth o credenciales (sí puedes pedir revisión).
          ]}'
    ("agent": null = lo haces tú; "project" = la carpeta donde trabajas)
 
-   El tablero tiene cinco columnas: todo, progress, review, done, approved.
+   El tablero tiene cinco columnas: todo, progress, review, done, errors.
    Los pasos entran en todo; un run los pasa solo a progress y, al terminar, a
-   review — es ahí donde yo compruebo lo que escribió el agente. A done y
-   approved los muevo yo desde el panel.
+   review — es ahí donde yo compruebo lo que escribió el agente. Un run que
+   falla cae en errors. A done lo muevo yo desde el panel.
 
 3) EJECUCIÓN
    Paso tuyo:
@@ -1119,13 +1119,13 @@ app.post("/api/plan/step/:stepId", (req, res) => {
   const step = currentPlan.steps.find((s) => s.id === req.params.stepId);
   if (!step) return res.status(404).json({ error: "Paso no encontrado" });
 
-  // 'status' es el vocabulario de siempre (pending/running/done/error) y se
-  // traduce; 'column' es directo. Un paso marcado 'error' no cambia de columna:
-  // se queda donde está con la marca roja.
-  if (status === "error") step.error = true;
-  else if (status || column) {
-    step.error = false;
-    place(step, columnFor(column || status, step.column), 0);
+  // La marca roja de error ya no es independiente: estar en "errors" es estar en error.
+  // El paso se mueve a la columna correcta según el estado, y si va a "errors",
+  // se establece el error en el paso. Sacar el paso de "errors" borra la marca.
+  if (status || column) {
+    const target = columnFor(column || status, step.column);
+    step.error = target === "errors";
+    place(step, target, 0);
   }
   if (note !== undefined) step.note = note;
   planChanged();
@@ -1183,8 +1183,7 @@ app.post("/api/plan/step/:stepId/move", (req, res) => {
     return res.status(400).json({ error: `'column' debe ser una de: ${COLUMNS.join(", ")}` });
   }
 
-  // Mover una tarjeta a mano es dar por vista la marca de error
-  if (["done", "approved"].includes(req.body.column)) step.error = false;
+  step.error = req.body.column === "errors";
   place(step, req.body.column, req.body.index);
   planChanged();
   res.json(step);
@@ -1672,7 +1671,7 @@ app.post("/api/config", (req, res) => {
 });
 
 app.listen(PORT, "127.0.0.1", () => {
-  console.log(`\n  Claude Dispatch → http://localhost:${PORT}\n`);
+  console.log(`\n  Dispatch → http://localhost:${PORT}\n`);
   console.log(`  Manifest para Claude Code: GET http://localhost:${PORT}/api/manifest`);
   console.log(`  Invocar agente:            POST http://localhost:${PORT}/agent/{id}\n`);
 });

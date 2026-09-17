@@ -2,16 +2,19 @@
 // sin arrancar el servidor (ver test/kanban.test.js).
 
 // Las cinco columnas, en el orden en que se ven en el panel.
-const COLUMNS = ["todo", "progress", "review", "done", "approved"];
+const COLUMNS = ["todo", "progress", "review", "done", "errors"];
 
-// Claude Code —y el CLAUDE.md que ya está copiado en otros proyectos— habla de
-// estados, no de columnas. Se traducen aquí para no romper lo que ya funciona.
-// 'error' cae en revisión: un paso fallido es justo lo que hay que mirar.
+// Mapea estados antiguos (pending/running/error/approved) a columnas modernas.
+// Existe porque el vocabulario de Claude Code usa estados, no columnas.
+// La entrada approved -> done es para mantener compatibilidad con tableros
+// antiguos donde la quinta columna se llamaba "approved": sin ella, esas tarjetas
+// caerían en "todo".
 const LEGACY_COLUMN = {
   pending: "todo",
   queued: "todo",
   running: "progress",
-  error: "review",
+  error: "errors",
+  approved: "done",
 };
 
 function columnFor(value, fallback = "todo") {
@@ -33,8 +36,9 @@ function placeStep(steps, step, column, index) {
   return step;
 }
 
-// A dónde va un paso cuando su run termina. Lo que escribe un agente local no
-// pasa a HECHO solo: va a REVISIÓN, que es donde el usuario lo comprueba.
-const COLUMN_AFTER_RUN = { done: "review", error: "review", cancelled: "todo" };
+// Define el destino de un paso tras un run local.
+// Un paso que termina en "done" va a "review" (revisión) para que el usuario lo verifique.
+// Un error va a "errors" y un cancelado vuelve a "todo".
+const COLUMN_AFTER_RUN = { done: "review", error: "errors", cancelled: "todo" };
 
 module.exports = { COLUMNS, LEGACY_COLUMN, COLUMN_AFTER_RUN, columnFor, bySort, placeStep };

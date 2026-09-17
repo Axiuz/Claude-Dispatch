@@ -8,6 +8,10 @@ const { COLUMNS, COLUMN_AFTER_RUN, columnFor, bySort, placeStep } = require("../
 
 const step = (id, column, sort) => ({ id, column, sort, status: column });
 
+test("las cinco columnas, en su orden, y sin la vieja 'approved'", () => {
+  assert.deepEqual(COLUMNS, ["todo", "progress", "review", "done", "errors"]);
+});
+
 test("una columna válida se devuelve tal cual", () => {
   COLUMNS.forEach((c) => assert.equal(columnFor(c), c));
 });
@@ -16,10 +20,13 @@ test("el vocabulario viejo se traduce, que es lo que manda Claude Code", () => {
   assert.equal(columnFor("pending"), "todo");
   assert.equal(columnFor("queued"), "todo");
   assert.equal(columnFor("running"), "progress");
-  // un paso fallido cae en revisión: es justo lo que hay que mirar
-  assert.equal(columnFor("error"), "review");
+  assert.equal(columnFor("error"), "errors");
   // 'done' ya es una columna, no pasa por la traducción
   assert.equal(columnFor("done"), "done");
+});
+
+test("el 'approved' de los tableros guardados aterriza en hecho, no en todo", () => {
+  assert.equal(columnFor("approved"), "done");
 });
 
 test("un valor desconocido cae al fallback, no rompe el tablero", () => {
@@ -82,8 +89,17 @@ test("un paso sin sort se ordena por su número de paso", () => {
   assert.deepEqual([a, b].sort(bySort).map((s) => s.id), ["b", "a"]);
 });
 
-test("lo que escribe un agente acaba en revisión, no en hecho", () => {
+test("lo que escribe un agente acaba en revisión, y lo que falla en errores", () => {
   assert.equal(COLUMN_AFTER_RUN.done, "review");
-  assert.equal(COLUMN_AFTER_RUN.error, "review");
+  assert.equal(COLUMN_AFTER_RUN.error, "errors");
   assert.equal(COLUMN_AFTER_RUN.cancelled, "todo");
+});
+
+test("placeStep lleva la tarjeta a errores y deja status al día", () => {
+  const a = step("a", "review", 1);
+  const steps = [a];
+  placeStep(steps, a, "errors", 0);
+  assert.equal(a.column, "errors");
+  assert.equal(a.status, "errors");
+  assert.equal(a.sort, 1);
 });
