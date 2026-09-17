@@ -8,7 +8,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { parseBranchLine, parseTrack, parseStatus, parseLog, parseBranches, markUnpushed, branchNameError, relPathError, commitArgs, checkoutArgs, isLockError } = require("../git");
+const { parseBranchLine, parseTrack, parseStatus, parseLog, parseBranches, markUnpushed, branchNameError, relPathError, commitArgs, checkoutArgs, isLockError, remoteUrlError, remoteNameError, repoNameError, parseRemotes } = require("../git");
 
 const FIELD = "\x1f";
 const RECORD = "\x1e";
@@ -360,4 +360,87 @@ test("la clave se olvida cuando su cola se vacía", async () => {
   await serialize("efímero", async () => "listo");
   await sleep(0);
   assert.equal(writeLocks.has("efímero"), false);
+});
+
+// ---- URL de un remoto ----
+
+test("la URL vacía devuelve un mensaje de error", () => {
+  assert.equal(remoteUrlError(""), "Escribe la URL del remoto");
+});
+
+test("la URL que empieza por '-' se rechaza", () => {
+  assert.equal(remoteUrlError("-https://example.com"), "La URL no puede empezar por '-'");
+});
+
+test("la URL con espacios o caracteres de control se rechaza", () => {
+  assert.equal(remoteUrlError("https://example.com\x01"), "La URL no puede llevar espacios ni caracteres de control");
+  assert.equal(remoteUrlError("https://a b"), "La URL no puede llevar espacios ni caracteres de control");
+});
+
+test("la URL demasiado larga se rechaza", () => {
+  assert.equal(remoteUrlError(`https://example.com/${"a".repeat(2049)}`), "La URL es demasiado larga");
+});
+
+test("la forma transporte::dirección se rechaza", () => {
+  assert.equal(remoteUrlError("ext::sh"), "No se admiten las URLs de la forma transporte::dirección");
+  assert.equal(remoteUrlError("::x"), "No se admiten las URLs de la forma transporte::dirección");
+});
+
+test("los esquemas que no son de git se rechazan", () => {
+  assert.equal(remoteUrlError("file:///etc/passwd"), "No se admite el esquema 'file': usa https, ssh o git");
+  assert.equal(remoteUrlError("ftp://example.com"), "No se admite el esquema 'ftp': usa https, ssh o git");
+  assert.equal(remoteUrlError("javascript://x"), "No se admite el esquema 'javascript': usa https, ssh o git");
+});
+
+test("las URL de repositorio normales se aceptan", () => {
+  assert.equal(remoteUrlError("https://github.com/a/b.git"), null);
+  assert.equal(remoteUrlError("HTTPS://github.com/a/b.git"), null);
+  assert.equal(remoteUrlError("http://gitea.local/a/b.git"), null);
+  assert.equal(remoteUrlError("ssh://git@host/a/b.git"), null);
+  assert.equal(remoteUrlError("git://host/a/b.git"), null);
+  assert.equal(remoteUrlError("git@github.com:a/b.git"), null);
+});
+
+test("lo que no parece una URL de repositorio se rechaza", () => {
+  assert.match(remoteUrlError("/Users/yo/repo"), /No parece una URL/);
+  assert.match(remoteUrlError("github.com/a/b"), /No parece una URL/);
+});
+
+// ---- Nombres de remoto y de repositorio ----
+
+test("el nombre de un remoto solo admite letras, números y . _ -", () => {
+  assert.equal(remoteNameError("origin"), null);
+  assert.equal(remoteNameError("mi-remoto_2.0"), null);
+  assert.match(remoteNameError(""), /Escribe el nombre/);
+  assert.match(remoteNameError("-origin"), /letras, números/);
+  assert.match(remoteNameError("ori gin"), /letras, números/);
+});
+
+test("el nombre de un repositorio admite 'dueño/nombre' pero no '..' ni guion inicial", () => {
+  assert.equal(repoNameError("mi-repo"), null);
+  assert.equal(repoNameError("Axiuz/mi-repo"), null);
+  assert.match(repoNameError("-repo"), /empezar por '-'/);
+  assert.match(repoNameError("a..b"), /llevar '\.\.'/);
+  assert.match(repoNameError("a b"), /Usa solo letras/);
+  assert.match(repoNameError("a/b/c"), /Usa solo letras/);
+});
+
+// ---- `git remote -v` ----
+
+test("cada remoto sale una sola vez aunque tenga fetch y push", () => {
+  const out = [
+    "origin\thttps://github.com/a/b.git (fetch)",
+    "origin\thttps://github.com/a/b.git (push)",
+    "upstream\tgit@github.com:c/d.git (fetch)",
+    "upstream\tgit@github.com:c/d.git (push)",
+  ].join("\n");
+  assert.deepEqual(parseRemotes(out), [
+    { name: "origin", url: "https://github.com/a/b.git" },
+    { name: "upstream", url: "git@github.com:c/d.git" },
+  ]);
+});
+
+test("sin remotos la lista viene vacía", () => {
+  assert.deepEqual(parseRemotes(""), []);
+  assert.deepEqual(parseRemotes("basura sin formato"), []);
 });

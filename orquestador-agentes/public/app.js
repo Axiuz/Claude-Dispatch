@@ -458,7 +458,7 @@ function renderProjects() {
       </button>
       <div class="project-hint">Todavía sin carpetas. Al registrar un plan, Claude Code añade el proyecto aquí.</div>
     `;
-    list.querySelector("[data-pick]").addEventListener("click", pickFolder);
+    list.querySelector("[data-pick]").addEventListener("click", () => pickFolder());
     return;
   }
 
@@ -535,7 +535,14 @@ async function removeProject(p) {
 
 // Selector de carpeta: la app nativa abre el diálogo de Finder y responde
 // llamando a window.onFolderPicked. Fuera de la app se pide la ruta a mano.
-function pickFolder() {
+let folderPickHandler = null;
+
+// Abre un diálogo para que el usuario elija una carpeta. Dentro de la app nativa lo
+// abre el puente de Finder; fuera se pide la ruta con un prompt. Si hay un manejador
+// registrado, se ejecuta con la ruta elegida y se limpia después de usarlo, para que
+// un diálogo cancelado no se lo quede pegado al siguiente.
+function pickFolder(handler = null) {
+  folderPickHandler = handler;
   const bridge = window.webkit?.messageHandlers?.pickFolder;
   if (bridge) {
     bridge.postMessage(null);
@@ -543,9 +550,18 @@ function pickFolder() {
   }
   const p = prompt("Ruta absoluta de la carpeta:");
   if (p) window.onFolderPicked(p);
+  else folderPickHandler = null;
 }
 
+const requestFolder = (handler) => pickFolder(handler);
+
 window.onFolderPicked = async (folder) => {
+  if (typeof folderPickHandler === "function") {
+    const handler = folderPickHandler;
+    folderPickHandler = null;
+    return handler(folder);
+  }
+  folderPickHandler = null;
   try {
     const project = await api("/api/projects", { path: folder });
     const idx = projects.findIndex((p) => p.path === project.path);
@@ -558,8 +574,8 @@ window.onFolderPicked = async (folder) => {
   }
 };
 
-$("#addProjectBtn").addEventListener("click", pickFolder);
-$("#sessionPickBtn").addEventListener("click", pickFolder);
+$("#addProjectBtn").addEventListener("click", () => pickFolder());
+$("#sessionPickBtn").addEventListener("click", () => pickFolder());
 
 // ---- Dock de la terminal: plegar y estirar ----
 // Sin botones en la cabecera: la cabecera entera es el interruptor de plegado y
@@ -1063,6 +1079,12 @@ function usageBar(label, used, limit, note) {
     </div>`;
 }
 
+function formatWeekReset(iso) {
+  const d = new Date(iso);
+  const day = d.toLocaleDateString("es", { weekday: "long" });
+  return `${day} ${formatClock(iso)}`;
+}
+
 function renderClaudeUsage() {
   const card = $("#usageCard");
   if (!claudeUsage || !claudeUsage.available) {
@@ -1085,6 +1107,9 @@ function renderClaudeUsage() {
   const sessionLimit = parseTokenLimit(config.claude_session_limit ?? DEFAULT_SESSION_LIMIT);
   const weeklyLimit = parseTokenLimit(config.claude_weekly_limit ?? DEFAULT_WEEKLY_LIMIT);
   const blockHours = claudeUsage.blockHours || 5;
+  const weeklyNote = weekly?.resetAt
+    ? `reinicia el ${formatWeekReset(weekly.resetAt)} · ${ses.today} ${ses.today === 1 ? "sesión hoy" : "sesiones hoy"}`
+    : `últimos ${claudeUsage.days} días · ${ses.today} sesiones hoy`;
   const sessionNote = session?.active
     ? `reinicia a las ${formatClock(session.resetAt)} · ${ses.active} ${ses.active === 1 ? "sesión activa" : "sesiones activas"}`
     : "sin sesión en curso";
@@ -1096,7 +1121,7 @@ function renderClaudeUsage() {
     </div>
     <div class="usage-gauges">
       ${usageBar(`Sesión (${blockHours} h)`, session?.total || 0, sessionLimit, sessionNote)}
-      ${usageBar("Semana", weekly?.total ?? win.total, weeklyLimit, `últimos ${claudeUsage.days} días · ${ses.today} sesiones hoy`)}
+      ${usageBar("Semana", weekly?.total ?? win.total, weeklyLimit, weeklyNote)}
     </div>
     <div class="usage-rows">
       ${rows
@@ -1135,6 +1160,7 @@ const MAX_GIT_COMMITS = 10;
 const BRANCH_FILTER_FROM = 8;   // a partir de cuántas ramas sale el buscador
 
 let gitInfo = null;      // última respuesta de /api/git
+let ghInfo = null;       // {available, authed, login} de /api/git/gh
 let gitLoading = false;
 let gitBusy = false;     // hay una operación de escritura en curso
 let gitDraft = "";       // el mensaje de commit que se está escribiendo
@@ -1196,6 +1222,15 @@ async function loadGit({ refresh = false, force = false } = {}) {
   // El plan solo se repide al cambiar de repositorio: lo demás llega por SSE,
   // así el sondeo de 5 s no se convierte en dos peticiones
   if (gitInfo && gitPlan?.root !== gitInfo.root) loadGitPlan();
+  if (gitInfo && gitInfo.repo && !gitInfo.hasRemote && !ghInfo) loadGh();
+}
+
+async function loadGh() {
+  ghInfo = { available: false, authed: false, login: null };
+  try {
+    ghInfo = await api("/api/git/gh");
+  } catch (_) {}
+  renderGit();
 }
 
 // ---- Plan de commits ----
@@ -1294,7 +1329,13 @@ function renderGit() {
     return;
   }
   if (!gitInfo.repo) {
-    card.innerHTML = head() + '<div class="git-empty">Esta carpeta no está en un repositorio Git.</div>';
+    card.innerHTML =
+      head() +
+      `<div class="git-section">
+         <div class="git-clean">Esta carpeta no está en un repositorio Git.</div>
+         <button class="btn primary git-wide" data-git-init${gitBusy ? " disabled" : ""}>Inicializar repositorio</button>
+       </div>`;
+    card.querySelector("[data-git-init]").addEventListener("click", () => doGitInit());
     return;
   }
   if (gitInfo.error) {
@@ -1423,6 +1464,21 @@ function renderGit() {
       </div>`;
   };
 
+  const remoteSection = () => {
+    if (gitInfo.hasRemote) return "";
+    const gh = ghInfo && ghInfo.available && ghInfo.authed
+      ? `<button class="btn" data-git-gh${gitBusy ? " disabled" : ""} title="Crear el repositorio en GitHub como ${escapeAttr(ghInfo.login || "tu cuenta")} y subirlo">Crear en GitHub ⌄</button>`
+      : "";
+    return `
+      <div class="git-section git-remote">
+        <div class="git-section-head"><span>Sin remoto</span></div>
+        <div class="row gap6">
+          <button class="btn primary" data-git-remote-set${gitBusy ? " disabled" : ""}>Conectar a remoto…</button>
+          ${gh}
+        </div>
+      </div>`;
+  };
+
   const primary = gitPrimaryAction();
 
   const branchBtn = `
@@ -1434,6 +1490,7 @@ function renderGit() {
   card.innerHTML =
     head(branchBtn) +
     `
+    ${remoteSection()}
     ${planSection()}
     <div class="git-commit-box">
       <textarea class="git-msg" id="gitMsg" rows="1" placeholder="Mensaje (⌘Enter para commitear)"></textarea>
@@ -1483,6 +1540,8 @@ function renderGit() {
   });
   card.querySelector("[data-git-stage-all]")?.addEventListener("click", () => gitRun(() => api("/api/git/stage", { path: gitDir(), all: true })));
   card.querySelector("[data-git-unstage-all]")?.addEventListener("click", () => gitRun(() => api("/api/git/unstage", { path: gitDir(), all: true })));
+  card.querySelector("[data-git-remote-set]")?.addEventListener("click", () => connectRemote());
+  card.querySelector("[data-git-gh]")?.addEventListener("click", (e) => openGhMenu(e.currentTarget));
   card.querySelector("[data-git-branches]").addEventListener("click", (e) => openBranchMenu(e.currentTarget));
   card.querySelector("[data-git-sync]").addEventListener("click", () => doSync());
   card.querySelector("[data-git-primary]").addEventListener("click", () => runGitPrimary());
@@ -1598,6 +1657,23 @@ async function doCommit(kind) {
 
 const doSync = () => gitRun(() => api("/api/git/remote", { path: gitDir(), action: "sync" }));
 
+const doGitInit = () => gitRun(() => api("/api/git/init", { path: gitDir() }));
+
+function connectRemote() {
+  if (gitBusy) return;
+  const url = prompt("URL del repositorio remoto:\n\nhttps://github.com/usuario/repo.git\ngit@github.com:usuario/repo.git");
+  if (!url || !url.trim()) return;
+  gitRun(() => api("/api/git/remote-set", { path: gitDir(), name: "origin", url: url.trim() }));
+}
+
+function createGhRepo(isPrivate) {
+  const suggested = (gitInfo?.root || "").split("/").pop() || "";
+  const name = prompt("Nombre del repositorio en GitHub:", suggested);
+  if (!name || !name.trim()) return;
+  const push = (gitInfo?.commits || []).length > 0;
+  gitRun(() => api("/api/git/create", { path: gitDir(), name: name.trim(), private: isPrivate, push }));
+}
+
 function openCommitMenu(anchor) {
   openGitMenu(anchor, [
     { label: "Commit", onPick: () => doCommit("plain") },
@@ -1608,6 +1684,13 @@ function openCommitMenu(anchor) {
     { separator: "" },
     { label: "Traer (pull)", onPick: () => gitRun(() => api("/api/git/remote", { path: gitDir(), action: "pull" })) },
     { label: "Subir (push)", onPick: () => gitRun(() => api("/api/git/remote", { path: gitDir(), action: "push" })) },
+  ]);
+}
+
+function openGhMenu(anchor) {
+  openGitMenu(anchor, [
+    { label: "Repositorio privado", onPick: () => createGhRepo(true) },
+    { label: "Repositorio público", onPick: () => createGhRepo(false) },
   ]);
 }
 

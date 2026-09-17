@@ -107,3 +107,69 @@ test("sin proyectos registrados no se puede abrir nada", (t) => {
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   assert.equal(sp.resolveInsideRoots(path.join(root, "src", "app.js"), []), null);
 });
+
+// ---- Nombre de una carpeta o archivo nuevos ----
+
+test("un nombre vacío o de solo espacios no vale", () => {
+  assert.equal(sp.entryNameError(""), "Escribe un nombre");
+  assert.equal(sp.entryNameError("   "), "Escribe un nombre");
+  assert.equal(sp.entryNameError(undefined), "Escribe un nombre");
+});
+
+test("'.' y '..' no son nombres", () => {
+  assert.match(sp.entryNameError("."), /no es un nombre válido/);
+  assert.match(sp.entryNameError(".."), /no es un nombre válido/);
+});
+
+test("un nombre que empieza por '-' se rechaza", () => {
+  assert.equal(sp.entryNameError("-carpeta"), "El nombre no puede empezar por '-'");
+});
+
+test("un nombre no puede llevar separadores ni caracteres de control", () => {
+  assert.equal(sp.entryNameError("a/b"), "El nombre no puede llevar '/'");
+  assert.equal(sp.entryNameError("a\\b"), "El nombre no puede llevar '/'");
+  assert.equal(sp.entryNameError("a\x01b"), "El nombre lleva caracteres de control");
+});
+
+test("un nombre de más de 255 caracteres se rechaza", () => {
+  assert.equal(sp.entryNameError("a".repeat(256)), "El nombre es demasiado largo");
+  assert.equal(sp.entryNameError("a".repeat(255)), null);
+});
+
+test("los nombres normales pasan, incluidos los que empiezan por punto", () => {
+  ["src", "mi-proyecto", "a.b.c", ".env", "README.md"].forEach((n) => assert.equal(sp.entryNameError(n), null));
+});
+
+// ---- Carpeta padre de un proyecto nuevo ----
+
+test("una carpeta corriente de tu home vale como padre", () => {
+  const dir = fs.mkdtempSync(path.join(os.homedir(), "safepath-home-"));
+  try {
+    assert.equal(sp.insideHome(dir), fs.realpathSync(dir));
+    assert.equal(sp.insideHome(os.homedir()), fs.realpathSync(os.homedir()));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fuera del home no vale, ni aunque exista", () => {
+  assert.equal(sp.insideHome("/etc"), null);
+  assert.equal(sp.insideHome("/"), null);
+});
+
+test("una carpeta que no existe no vale", () => {
+  assert.equal(sp.insideHome(path.join(os.homedir(), "no-existe-seguro-12345")), null);
+  assert.equal(sp.insideHome(""), null);
+});
+
+test("las carpetas ocultas y las de ruido quedan fuera", () => {
+  const hidden = fs.mkdtempSync(path.join(os.homedir(), ".safepath-oculta-"));
+  const noise = path.join(hidden, "node_modules");
+  try {
+    assert.equal(sp.insideHome(hidden), null);
+    fs.mkdirSync(noise);
+    assert.equal(sp.insideHome(noise), null);
+  } finally {
+    fs.rmSync(hidden, { recursive: true, force: true });
+  }
+});

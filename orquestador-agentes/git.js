@@ -261,9 +261,9 @@ async function readRepo(dir, { limit = MAX_COMMITS } = {}) {
   try {
     const [statusOut, logOut, remoteOut] = await Promise.all([
       git(root, ["status", "--porcelain=v1", "-b", "-z"]),
-      git(root, ["log", `--max-count=${limit}`, `--format=${LOG_FORMAT}`]),
+      execGit(root, ["--no-optional-locks", "log", `--max-count=${limit}`, `--format=${LOG_FORMAT}`], GIT_TIMEOUT_MS),
       // El uso de execGit en lugar de runGit evita que la lectura se bloquee por operaciones de escritura.
-      execGit(root, ["remote"], GIT_TIMEOUT_MS),
+      execGit(root, ["remote", "-v"], GIT_TIMEOUT_MS),
     ]);
     const status = parseStatus(statusOut);
     return {
@@ -273,12 +273,13 @@ async function readRepo(dir, { limit = MAX_COMMITS } = {}) {
       error: null,
       // hasRemote se define solo para evitar que se muestre "Publicar rama" en repositorios sin remoto.
       hasRemote: remoteOut.ok && remoteOut.stdout.trim().length > 0,
+      remotes: remoteOut.ok ? parseRemotes(remoteOut.stdout) : [],
       ...status,
-      commits: markUnpushed(parseLog(logOut), status.ahead),
+      commits: logOut.ok ? markUnpushed(parseLog(logOut.stdout), status.ahead) : [],
       readAt: new Date().toISOString(),
     };
   } catch (err) {
-    return { path: dir, root, repo: true, error: err.message, hasRemote: false, files: [], commits: [] };
+    return { path: dir, root, repo: true, error: err.message, hasRemote: false, remotes: [], files: [], commits: [] };
   }
 }
 
@@ -356,6 +357,69 @@ function relPathError(p) {
   if (s.startsWith("/") || s.startsWith("-")) return `Ruta no válida: ${s}`;
   if (s.split("/").includes("..")) return `Ruta no válida: ${s}`;
   return null;
+}
+
+const REMOTE_SCHEMES = new Set(["https", "http", "ssh", "git"]);
+const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const SCP_LIKE = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^:\s]/;
+const TRANSPORT_HELPER = /^[A-Za-z0-9+.-]*::/;
+const SCHEME = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//;
+const MAX_URL_LENGTH = 2048;
+
+// Valida que la URL del remoto sea correcta: no puede empezar por guion, no puede tener espacios ni caracteres de control,
+// no puede ser demasiado larga, y solo permite esquemas como https, http, ssh o git. Las URLs de forma transporte::dirección
+// (como 'ext::sh -c ...') son rechazadas porque permitirían comandos arbitrarios. URLs como 'file://' podrían clonar desde cualquier lugar.
+function remoteUrlError(url) {
+  const u = String(url || "").trim();
+  if (!u) return "Escribe la URL del remoto";
+  if (u.startsWith("-")) return "La URL no puede empezar por '-'";
+  if (/[\s\x00-\x1f\x7f]/.test(u)) return "La URL no puede llevar espacios ni caracteres de control";
+  if (u.length > MAX_URL_LENGTH) return "La URL es demasiado larga";
+  if (TRANSPORT_HELPER.test(u)) return "No se admiten las URLs de la forma transporte::dirección";
+  const scheme = u.match(SCHEME);
+  if (scheme) {
+    const name = scheme[1].toLowerCase();
+    return REMOTE_SCHEMES.has(name) ? null : `No se admite el esquema '${name}': usa https, ssh o git`;
+  }
+  if (SCP_LIKE.test(u)) return null;
+  return "No parece una URL de repositorio: https://…, ssh://… o git@servidor:ruta";
+}
+
+// Valida que el nombre del remoto cumpla con las reglas: debe tener al menos un carácter, no puede ser demasiado largo
+// (máximo 100 caracteres), y solo puede contener letras, números, puntos, guiones y guiones bajos.
+// Si no cumple, se devuelve un mensaje de error explicativo.
+function remoteNameError(name) {
+  const n = String(name || "").trim();
+  if (!n) return "Escribe el nombre del remoto";
+  if (n.length > 100) return "El nombre del remoto es demasiado largo";
+  if (!REMOTE_NAME.test(n)) return "Un nombre de remoto solo lleva letras, números, '.', '_' y '-'";
+  return null;
+}
+
+const REPO_NAME = /^(?:[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/;
+
+// Valida que el nombre del repositorio sea válido: no puede empezar por guion, no puede contener '..',
+// no puede ser demasiado largo (máximo 100 caracteres), y debe seguir el patrón de nombre de repositorio
+// (letras, números, puntos, guiones y guiones bajos, opcionalmente con dueño/nombre).
+function repoNameError(name) {
+  const n = String(name || "").trim();
+  if (!n) return "Escribe el nombre del repositorio";
+  if (n.startsWith("-")) return "El nombre no puede empezar por '-'";
+  if (n.includes("..")) return "El nombre no puede llevar '..'";
+  if (n.length > 100) return "El nombre es demasiado largo";
+  if (!REPO_NAME.test(n)) return "Usa solo letras, números, '.', '_' y '-', o dueño/nombre";
+  return null;
+}
+
+// Analiza la salida de 'git remote -v' para extraer los remotos válidos (nombre, URL, tipo fetch/push),
+// guardándolos en un mapa para evitar duplicados. Devuelve un array con los remotos únicos y válidos.
+function parseRemotes(stdout) {
+  const seen = new Map();
+  for (const line of String(stdout || "").split("\n")) {
+    const m = line.trim().match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
+    if (m && !seen.has(m[1])) seen.set(m[1], { name: m[1], url: m[2] });
+  }
+  return [...seen.values()];
 }
 
 // ================= Argumentos (puros, para poder probarlos sin repo) =================
@@ -473,6 +537,97 @@ async function sync(dir) {
   return { ok: up.ok, output: [down.output, up.output].filter(Boolean).join("\n") };
 }
 
+// Inicializa un nuevo repositorio Git en la carpeta especificada. Si ya hay un repositorio, devuelve un error.
+// Si el nombre de rama no es válido, devuelve un error. Intenta crear el repositorio con -b main;
+// si esa opción no es compatible con la versión de git, cae a 'git init' y establece symbolic-ref para la rama.
+// El resultado es equivalente sin necesidad de git 2.28.
+async function initRepo(dir, { branch = "main" } = {}) {
+  if (findRepoRoot(dir)) return { ok: false, output: "Esta carpeta ya está dentro de un repositorio Git" };
+  const bad = branchNameError(branch);
+  if (bad) return { ok: false, output: bad };
+
+  const withBranch = await runGit(dir, ["init", "-b", branch]);
+  if (withBranch.ok) return withBranch;
+  const plain = await runGit(dir, ["init"]);
+  if (!plain.ok) return withBranch;
+  const head = await runGit(dir, ["symbolic-ref", "HEAD", `refs/heads/${branch}`]);
+  return head.ok ? plain : head;
+}
+
+async function listRemotes(dir) {
+  const root = findRepoRoot(dir);
+  if (!root) return [];
+  const out = await execGit(root, ["remote", "-v"], GIT_TIMEOUT_MS);
+  return out.ok ? parseRemotes(out.stdout) : [];
+}
+
+// Configura un remoto en el repositorio, eligiendo entre 'remote add' o 'remote set-url' según si ya existe.
+// Valida el nombre y la URL antes de ejecutar el comando. Si hay errores en nombre o URL, devuelve el mensaje correspondiente.
+// Evita errores de duplicación al usar el nombre existente.
+async function setRemote(dir, { name = "origin", url } = {}) {
+  const root = findRepoRoot(dir);
+  if (!root) return notRepo();
+  const badName = remoteNameError(name);
+  if (badName) return { ok: false, output: badName };
+  const badUrl = remoteUrlError(url);
+  if (badUrl) return { ok: false, output: badUrl };
+
+  const existing = await listRemotes(root);
+  const action = existing.some((r) => r.name === name.trim()) ? "set-url" : "add";
+  return runGit(root, ["remote", action, name.trim(), String(url).trim()]);
+}
+
+const GH_STATUS_TIMEOUT_MS = 10000;
+
+// Ejecuta el comando 'gh' con los argumentos dados, con un límite de tiempo. Si 'gh' no está instalado,
+// devuelve un mensaje indicando que se debe instalar (sin lanzar un error de proceso). Usa execFile con
+// configuración de timeout y manejo de errores para evitar bloqueos.
+function execGh(args, { cwd, timeout = NET_TIMEOUT_MS } = {}) {
+  return new Promise((resolve) => {
+    execFile(
+      "gh",
+      args,
+      { cwd, timeout, maxBuffer: MAX_BUFFER, encoding: "utf-8", windowsHide: true, env: GIT_ENV },
+      (err, stdout, stderr) => {
+        const output = [stdout, stderr]
+          .map((part) => String(part || "").trim())
+          .filter(Boolean)
+          .join("\n");
+        resolve({
+          ok: !err,
+          missing: Boolean(err && err.code === "ENOENT"),
+          output: output || (err ? err.message : ""),
+        });
+      }
+    );
+  });
+}
+
+// Verifica el estado de autenticación en gh. Si no está instalado o no está disponible, devuelve que no está disponible.
+// Si está disponible, devuelve si está autenticado y el nombre de usuario si está autenticado.
+async function ghStatus() {
+  const res = await execGh(["auth", "status"], { timeout: GH_STATUS_TIMEOUT_MS });
+  if (res.missing) return { available: false, authed: false, login: null };
+  const login = res.output.match(/account\s+(\S+)/);
+  return { available: true, authed: res.ok, login: res.ok && login ? login[1] : null };
+}
+
+// Crea un nuevo repositorio en GitHub usando la CLI 'gh'. Valida el nombre del repositorio antes de crearlo.
+// Si 'gh' no está instalado, devuelve un mensaje de advertencia en vez de error, porque es opcional.
+// Permite especificar si es privado o público y si se debe hacer push al crearlo.
+async function ghCreateRepo(dir, { name, private: isPrivate = true, push = true } = {}) {
+  const root = findRepoRoot(dir);
+  if (!root) return notRepo();
+  const bad = repoNameError(name);
+  if (bad) return { ok: false, output: bad };
+
+  const args = ["repo", "create", name.trim(), "--source", ".", isPrivate ? "--private" : "--public"];
+  if (push) args.push("--push");
+  const res = await execGh(args, { cwd: root });
+  if (res.missing) return { ok: false, output: "gh no está instalado. Instálalo con: brew install gh" };
+  return { ok: res.ok, output: res.output };
+}
+
 module.exports = {
   // parseo puro
   parseBranchLine,
@@ -483,6 +638,10 @@ module.exports = {
   markUnpushed,
   branchNameError,
   relPathError,
+  remoteUrlError,
+  remoteNameError,
+  repoNameError,
+  parseRemotes,
   isLockError,
   commitArgs,
   checkoutArgs,
@@ -499,6 +658,11 @@ module.exports = {
   push,
   pull,
   sync,
+  initRepo,
+  listRemotes,
+  setRemote,
+  ghStatus,
+  ghCreateRepo,
   LETTERS,
   MAX_COMMITS,
 };

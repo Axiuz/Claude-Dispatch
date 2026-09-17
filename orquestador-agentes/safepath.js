@@ -88,6 +88,38 @@ function looksBinary(buf) {
   return buf.subarray(0, 8192).includes(0);
 }
 
+const MAX_NAME_LENGTH = 255;
+const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
+
+// Valida el nombre de un archivo o carpeta: no puede empezar por guion, contener caracteres de control,
+// tener más de 255 caracteres, o ser un punto o dos puntos. Devuelve un mensaje de error si no es válido,
+// o null si está bien.
+function entryNameError(name) {
+  const n = typeof name === "string" ? name.trim() : "";
+  if (!n) return "Escribe un nombre";
+  if (n === "." || n === "..") return `"${n}" no es un nombre válido`;
+  if (n.startsWith("-")) return "El nombre no puede empezar por '-'";
+  if (n.includes("/") || n.includes("\\")) return "El nombre no puede llevar '/'";
+  if (CONTROL_CHARS.test(n)) return "El nombre lleva caracteres de control";
+  if (n.length > MAX_NAME_LENGTH) return "El nombre es demasiado largo";
+  return null;
+}
+
+// Verifica que una ruta esté dentro del directorio personal del usuario (home) y que no esté en una carpeta
+// oculta ni de ruido. Solo permite crear proyectos nuevos fuera de las carpetas registradas, asegurando que
+// el padre esté dentro de la carpeta personal del usuario.
+function insideHome(dir) {
+  const abs = expandPath(dir);
+  if (!abs) return null;
+  const real = realOrNull(abs);
+  if (!real) return null;
+  const home = realOrNull(os.homedir());
+  if (!home || !isInside(home, real)) return null;
+  const segments = path.relative(home, real).split(path.sep).filter(Boolean);
+  if (segments.some((seg) => seg.startsWith(".") || SKIP_DIRS.has(seg))) return null;
+  return real;
+}
+
 module.exports = {
   SKIP_DIRS,
   MAX_FILE_BYTES,
@@ -97,4 +129,7 @@ module.exports = {
   hasSkippedSegment,
   resolveInsideRoots,
   looksBinary,
+  entryNameError,
+  insideHome,
+  MAX_NAME_LENGTH,
 };

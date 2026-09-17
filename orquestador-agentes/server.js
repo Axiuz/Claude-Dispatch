@@ -1256,6 +1256,28 @@ app.post("/api/projects", (req, res) => {
   res.json(projectView(projects.find((p) => p.path === dir)));
 });
 
+app.post("/api/projects/new", async (req, res) => {
+  const parent = safepath.insideHome(req.body.parent);
+  if (!parent || !isDirectory(parent)) {
+    return res.status(403).json({ error: "La carpeta padre tiene que ser una carpeta tuya dentro de " + os.homedir() });
+  }
+  const bad = safepath.entryNameError(req.body.name);
+  if (bad) return res.status(400).json({ error: bad });
+
+  const dir = path.join(parent, String(req.body.name).trim());
+  if (fs.existsSync(dir)) return res.status(409).json({ error: "Ya existe algo con ese nombre" });
+
+  try {
+    fs.mkdirSync(dir);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+  touchProject(dir);
+
+  const git = req.body.git ? await gitinfo.initRepo(dir) : null;
+  res.json({ project: projectView(projects.find((pr) => pr.path === dir)), git });
+});
+
 // Quita la carpeta de la lista (no toca el disco) y cierra su sesión si la tiene
 app.delete("/api/projects", (req, res) => {
   const dir = resolveDir(req.body.path);
@@ -1351,6 +1373,35 @@ app.post("/api/files/write", (req, res) => {
 
   try {
     fs.writeFileSync(file, req.body.content, "utf-8");
+    const st = fs.statSync(file);
+    res.json({ ok: true, path: file, size: st.size, mtimeMs: st.mtimeMs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/files/mkdir", (req, res) => {
+  const dir = insideProject(req.body.path);
+  if (!dir) return res.status(403).json(FORBIDDEN);
+  const bad = safepath.entryNameError(path.basename(dir));
+  if (bad) return res.status(400).json({ error: bad });
+  if (fs.existsSync(dir)) return res.status(409).json({ error: "Ya existe algo con ese nombre" });
+  try {
+    fs.mkdirSync(dir);
+    res.json({ ok: true, path: dir });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/files/new", (req, res) => {
+  const file = insideProject(req.body.path);
+  if (!file) return res.status(403).json(FORBIDDEN);
+  const bad = safepath.entryNameError(path.basename(file));
+  if (bad) return res.status(400).json({ error: bad });
+  if (fs.existsSync(file)) return res.status(409).json({ error: "Ya existe algo con ese nombre" });
+  try {
+    fs.writeFileSync(file, "", { encoding: "utf-8", flag: "wx" });
     const st = fs.statSync(file);
     res.json({ ok: true, path: file, size: st.size, mtimeMs: st.mtimeMs });
   } catch (err) {
@@ -1482,6 +1533,32 @@ app.post("/api/git/commit", async (req, res) => {
     result = { ok: after.ok, output: [result.output, after.output].filter(Boolean).join("\n") };
   }
   await gitWrite(dir, result, res);
+});
+
+app.post("/api/git/init", async (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  const branch = typeof req.body.branch === "string" && req.body.branch.trim() ? req.body.branch : "main";
+  await gitWrite(dir, await gitinfo.initRepo(dir, { branch }), res);
+});
+
+app.post("/api/git/remote-set", async (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  const { name = "origin", url } = req.body || {};
+  await gitWrite(dir, await gitinfo.setRemote(dir, { name, url }), res);
+});
+
+app.get("/api/git/gh", async (req, res) => {
+  res.json(await gitinfo.ghStatus());
+});
+
+app.post("/api/git/create", async (req, res) => {
+  const dir = gitDirOf(req, res);
+  if (!dir) return;
+  const { name, push = true } = req.body || {};
+  const isPrivate = req.body.private !== false;
+  await gitWrite(dir, await gitinfo.ghCreateRepo(dir, { name, private: isPrivate, push: !!push }), res);
 });
 
 app.post("/api/git/remote", async (req, res) => {
