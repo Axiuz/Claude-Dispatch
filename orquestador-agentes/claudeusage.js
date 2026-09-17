@@ -20,8 +20,7 @@ const path = require("path");
 const HOUR_MS = 3600 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const SESSION_HOURS = 5;
-const WEEK_HOURS = 7 * 24;
-const DEFAULT_DAYS = 7; // ventana de archivos que se leen, por mtime
+const DEFAULT_DAYS = 8; // ventana de archivos que se leen, por mtime
 const ACTIVE_MS = 5 * 60 * 1000; // una sesión "activa" es la que escribió hace poco
 
 // ---------- Helpers puros (los que prueban los tests) ----------
@@ -105,6 +104,27 @@ function splitLines(buffer) {
     }
   }
   return { lines, rest: buffer.slice(start) };
+}
+
+// Calcula el inicio de la semana en hora local, considerando que la semana comienza el domingo a las 00:00.
+// Resta los días de la semana (0 = domingo) para que el inicio coincida con el domingo anterior al día dado.
+// Usa setDate para ajustar la fecha sin afectar el horario de verano, evitando errores por cambios de zona horaria.
+function weekStart(date = new Date()) {
+  const d = date instanceof Date ? new Date(date.getTime()) : new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay());
+  return d;
+}
+
+// Calcula la fecha de reset de la semana (el domingo siguiente a las 00:00) para el gasto de tokens de Claude Code.
+// Se basa en el inicio de la semana (obtenido con weekStart) y se suma 7 días para obtener el próximo domingo.
+function weekReset(date = new Date()) {
+  const start = weekStart(date);
+  if (!start) return null;
+  const d = new Date(start.getTime());
+  d.setDate(d.getDate() + 7);
+  return d;
 }
 
 function sumHours(byHour, fromHour, toHour) {
@@ -304,6 +324,8 @@ function createTracker(options = {}) {
     const nowHour = hourOf(new Date());
     const blocks = sessionBlocks(byHour, blockHours);
     const current = activeBlock(blocks, Date.now());
+    const weekFrom = weekStart(new Date());
+    const weekTo = weekReset(new Date());
     return {
       available,
       days,
@@ -320,9 +342,10 @@ function createTracker(options = {}) {
             lastAt: blocks.length ? blocks[blocks.length - 1].lastAt : null,
           },
       weekly: {
-        ...sumHours(byHour, nowHour - WEEK_HOURS + 1, nowHour),
-        sinceAt: new Date((nowHour - WEEK_HOURS + 1) * HOUR_MS).toISOString(),
-        hours: WEEK_HOURS,
+        ...sumHours(byHour, hourOf(weekFrom), nowHour),
+        sinceAt: weekFrom.toISOString(),
+        resetAt: weekTo.toISOString(),
+        hours: Math.round((weekTo - weekFrom) / HOUR_MS),
       },
       models,
       history,
@@ -386,7 +409,8 @@ module.exports = {
   sessionBlocks,
   activeBlock,
   sumHours,
+  weekStart,
+  weekReset,
   SESSION_HOURS,
-  WEEK_HOURS,
   HOUR_MS,
 };

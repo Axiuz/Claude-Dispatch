@@ -18,6 +18,8 @@ const {
   sessionBlocks,
   activeBlock,
   sumHours,
+  weekStart,
+  weekReset,
   HOUR_MS,
 } = require("../claudeusage");
 
@@ -332,4 +334,74 @@ test("el snapshot trae la sesión en curso y la ventana semanal", () => {
   assert.equal(snap.session.total, 6);
   assert.equal(snap.weekly.total, 6);
   assert.equal(snap.blockHours, 5);
+});
+
+// ---- La semana natural ----
+// Diciembre de 2023: los domingos caen el 10, el 17, el 24 y el 31.
+
+test("un miércoles cualquiera devuelve el domingo anterior a las 00:00", () => {
+  const result = weekStart(new Date(2023, 11, 13, 15, 30));
+  assert.equal(result.getFullYear(), 2023);
+  assert.equal(result.getMonth(), 11);
+  assert.equal(result.getDate(), 10);
+  assert.equal(result.getHours(), 0);
+  assert.equal(result.getMinutes(), 0);
+  assert.equal(result.getSeconds(), 0);
+  assert.equal(result.getMilliseconds(), 0);
+});
+
+test("un domingo a las 00:00 en punto se devuelve a sí mismo", () => {
+  const result = weekStart(new Date(2023, 11, 17, 0, 0));
+  assert.equal(result.getMonth(), 11);
+  assert.equal(result.getDate(), 17);
+  assert.equal(result.getHours(), 0);
+});
+
+test("un domingo a las 23:59 sigue devolviendo ese mismo domingo a las 00:00", () => {
+  const result = weekStart(new Date(2023, 11, 17, 23, 59));
+  assert.equal(result.getMonth(), 11);
+  assert.equal(result.getDate(), 17);
+  assert.equal(result.getHours(), 0);
+});
+
+test("un sábado a las 23:59 devuelve el domingo anterior, y su reset es el domingo siguiente", () => {
+  const date = new Date(2023, 11, 23, 23, 59);
+  const start = weekStart(date);
+  const reset = weekReset(date);
+  assert.equal(start.getDate(), 17);
+  assert.equal(start.getHours(), 0);
+  assert.equal(reset.getDate(), 24);
+  assert.equal(reset.getHours(), 0);
+});
+
+test("el reset cae en el mes siguiente cuando la semana cruza el cambio de mes", () => {
+  const reset = weekReset(new Date(2023, 11, 28, 10, 0));
+  assert.equal(reset.getFullYear(), 2023);
+  assert.equal(reset.getMonth(), 11);
+  assert.equal(reset.getDate(), 31);
+  const siguiente = weekReset(new Date(2024, 0, 2, 10, 0));
+  assert.equal(siguiente.getFullYear(), 2024);
+  assert.equal(siguiente.getMonth(), 0);
+  assert.equal(siguiente.getDate(), 7);
+});
+
+test("entre el principio y el reset de la semana hay exactamente 7 días", () => {
+  const date = new Date(2023, 11, 13, 15, 30);
+  const diff = (weekReset(date).getTime() - weekStart(date).getTime()) / (24 * HOUR_MS);
+  assert.equal(diff, 7);
+});
+
+test("una fecha inválida no tiene semana", () => {
+  assert.equal(weekStart(new Date("no es una fecha")), null);
+  assert.equal(weekReset(new Date("no es una fecha")), null);
+});
+
+test("el principio de la semana siempre es medianoche, sea cual sea la hora", () => {
+  for (const hora of [0, 7, 13, 23]) {
+    const result = weekStart(new Date(2023, 11, 13, hora, 45, 30, 500));
+    assert.equal(result.getHours(), 0);
+    assert.equal(result.getMinutes(), 0);
+    assert.equal(result.getSeconds(), 0);
+    assert.equal(result.getMilliseconds(), 0);
+  }
 });
