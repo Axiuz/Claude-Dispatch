@@ -12,3 +12,6 @@ orquestador-agentes/data/plan.json
 
 # Plan de commits por repositorio: rutas reales y trabajo sin commitear
 orquestador-agentes/data/commitplans.json
+
+# Notas y to-dos por proyecto: trabajo del usuario y rutas reales
+orquestador-agentes/data/notes.json
