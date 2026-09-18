@@ -13,6 +13,7 @@ const gitinfo = require("./git");
 const commitplan = require("./commitplan");
 const notesstore = require("./notes");
 const debugsuite = require("./debug");
+const inbox = require("./inbox");
 
 const DEFAULT_DATA_DIR = path.join(__dirname, "data");
 // La app de macOS pasa ORQ_DATA_DIR para guardar los datos fuera del bundle
@@ -150,7 +151,24 @@ function setStepColumn(stepId, column, extra = {}) {
   if (!step) return;
   Object.assign(step, extra);
   if (column && column !== step.column) place(step, column, 0);
+  movedByClaude(step);
   planChanged();
+}
+
+// Marca la columna como entregada cuando un paso manual es movido por Claude.
+// Evita que una tarjeta se mueva a review y luego se entregue a sí misma.
+function movedByClaude(step) {
+  if (step.manual) step.deliveredColumn = step.column;
+}
+
+// Tarjetas del usuario que sobreviven a registrar o cerrar un plan: todas las
+// manuales salvo las de done. Son trabajo suyo, no reflejo del plan de Claude.
+const keptCards = (plan) => (plan ? plan.steps.filter((s) => s.manual && s.column !== "done") : []);
+
+// Genera un ID único para tarjetas manuales (card-N) para no chocar con los pasos de Claude (step-N).
+function nextCardId(plan) {
+  plan.cardSeq = (plan.cardSeq || 0) + 1;
+  return `card-${plan.cardSeq}`;
 }
 
 // ============ Proyectos recientes ============
@@ -258,7 +276,27 @@ function writeSse(res, event, payload) {
   } catch (_) {}
 }
 
+// Configura los hooks para enviar eventos a /api/hooks/* mediante curl con el ID de sesión.
+// El id viaja en DISPATCH_SESSION: con el cwd no se distinguirían dos sesiones.
+// Si el servidor no responde, curl no imprime nada y Claude sigue normal.
+function hookSettings() {
+  const hook = (event) => [
+    {
+      hooks: [
+        {
+          type: "command",
+          command: `curl -s --max-time 3 -X POST -H 'Content-Type: application/json' --data-binary @- "http://127.0.0.1:${PORT}/api/hooks/${event}?session=$DISPATCH_SESSION"`,
+        },
+      ],
+    },
+  ];
+  return JSON.stringify({
+    hooks: { SessionStart: hook("session-start"), UserPromptSubmit: hook("user-prompt"), Stop: hook("stop") },
+  });
+}
+
 function startSession(cwd, kind, cols, rows) {
+  const id = crypto.randomUUID();
   const shell = process.env.SHELL || os.userInfo().shell || "/bin/zsh";
   const env = { ...process.env, SHELL: shell, TERM: "xterm-256color", COLORTERM: "truecolor" };
   delete env.ORQ_DATA_DIR;
@@ -275,9 +313,21 @@ function startSession(cwd, kind, cols, rows) {
     // El `exec` final deja la shell viva al salir de claude, en vez de cerrar
     // el pty y perder todo el scrollback.
     env.DISPATCH_INSTRUCTIONS = buildInstructions(cwd);
+    env.DISPATCH_SETTINGS = hookSettings();
+    env.DISPATCH_SESSION = id;
+    env.DISPATCH_RC_NAME = path.basename(cwd);
+    const remote = config.claude_remote_control !== false;
+    const rc = remote ? ' --remote-control "$DISPATCH_RC_NAME"' : "";
+    // Mantiene al Mac despierto mientras se ejecuta Claude con remote control,
+    // evitando el reposo por inactividad, disco o sistema.
+    // Solo se activa cuando se usa el control remoto (remote control).
+    // Al salir de Claude, el proceso se detiene y se libera el mantenimiento.
+    // No previene el reposo al cerrar la tapa si no hay monitor externo.
+    const awake = remote ? "/usr/bin/caffeinate -ims " : "";
     args.push(
       "-c",
-      'claude --append-system-prompt "$DISPATCH_INSTRUCTIONS"; unset DISPATCH_INSTRUCTIONS; exec "$SHELL" -l -i'
+      `${awake}claude --append-system-prompt "$DISPATCH_INSTRUCTIONS" --settings "$DISPATCH_SETTINGS"${rc}; ` +
+        'unset DISPATCH_INSTRUCTIONS DISPATCH_SETTINGS DISPATCH_SESSION DISPATCH_RC_NAME; exec "$SHELL" -l -i'
     );
   }
 
@@ -290,9 +340,11 @@ function startSession(cwd, kind, cols, rows) {
   });
 
   const s = {
-    id: crypto.randomUUID(),
+    id,
     cwd,
     kind,
+    claudeState: kind === "claude" ? "starting" : null,
+    askNotes: false,
     name: path.basename(cwd),
     startedAt: new Date().toISOString(),
     exited: false,
@@ -879,6 +931,19 @@ auth o credenciales (sí puedes pedir revisión).
    agente.${closingNote} Al terminar, repórtame qué cambió y qué dudas tienes.
    Cierra con: curl -s -X DELETE http://localhost:${port}/api/plan
 
+## Tarjetas del tablero y notas
+Las tarjetas que escribo o muevo yo en el tablero son encargos para ti. Te llegan
+solas al terminar tu turno, o escritas en la sesión si estás parado, con su id:
+- En curso (progress): hazlas en cuanto termines lo que estabas haciendo.
+- Por hacer (todo): propónmelas y pregúntame antes de empezar.
+- Revisión (review): revisa lo que se hizo para esa tarea y repórtame.
+- Errores (errors): algo falla; investiga y arréglalo.
+- Hecho (done): nada, es mi registro.
+Muévelas tú con POST /api/plan/step/<id> {"column":"..."} mientras las trabajas.
+Cerrar el plan no las borra: siguen en el tablero hasta que las paso a hecho.
+Al cerrar un plan te enseñaré mis notas pendientes del proyecto; pregúntame si
+sigo con alguna y no empieces ninguna sin mi respuesta.
+
 ## Reglas
 - Al empezar cada tarea, consulta los agentes activos y el estado:
     curl -s http://localhost:${port}/api/manifest
@@ -1095,6 +1160,8 @@ app.post("/api/plan", (req, res) => {
   const validProject = projectDir && isDirectory(projectDir) ? projectDir : null;
   if (validProject) touchProject(validProject);
 
+  const previous = currentPlan;
+  const kept = keptCards(previous);
   currentPlan = {
     id: crypto.randomUUID(),
     title,
@@ -1118,6 +1185,15 @@ app.post("/api/plan", (req, res) => {
       durationMs: null,
     })),
   };
+  currentPlan.cardSeq = previous?.cardSeq || 0;
+  kept.forEach((card) => {
+    currentPlan.seq += 1;
+    currentPlan.steps.push({
+      ...card,
+      id: card.id.startsWith("card-") ? card.id : nextCardId(currentPlan),
+      order: currentPlan.seq,
+    });
+  });
 
   savePlan();
   broadcast("plan:new", currentPlan);
@@ -1142,6 +1218,7 @@ app.post("/api/plan/step/:stepId", (req, res) => {
     place(step, target, 0);
   }
   if (note !== undefined) step.note = note;
+  movedByClaude(step);
   planChanged();
   res.json(step);
 });
@@ -1169,7 +1246,7 @@ app.post("/api/plan/tasks", (req, res) => {
 
   currentPlan.seq = (currentPlan.seq || currentPlan.steps.length) + 1;
   const step = {
-    id: `step-${currentPlan.seq}`,
+    id: nextCardId(currentPlan),
     order: currentPlan.seq,
     sort: 0,
     description: description.slice(0, 500),
@@ -1185,6 +1262,7 @@ app.post("/api/plan/tasks", (req, res) => {
   currentPlan.steps.push(step);
   place(step, columnFor(req.body.column), req.body.index);
   planChanged();
+  offerCards();
   res.json(step);
 });
 
@@ -1200,6 +1278,7 @@ app.post("/api/plan/step/:stepId/move", (req, res) => {
   step.error = req.body.column === "errors";
   place(step, req.body.column, req.body.index);
   planChanged();
+  offerCards();
   res.json(step);
 });
 
@@ -1212,11 +1291,31 @@ app.delete("/api/plan/step/:stepId", (req, res) => {
   res.json({ ok: true, removed: step.id });
 });
 
+// {all:true} lo manda el botón Limpiar del panel y lo borra todo. Sin él, que es
+// como cierra Claude, se conservan las tarjetas del usuario y queda pendiente
+// enseñarle las notas en su siguiente Stop.
 app.delete("/api/plan", (req, res) => {
-  currentPlan = null;
-  savePlan();
-  broadcast("plan:cleared", {});
-  res.json({ ok: true });
+  const all = req.body?.all === true;
+  const target = cardsSession();
+  if (!all && target) target.askNotes = true;
+
+  const kept = all ? [] : keptCards(currentPlan);
+  if (!kept.length) {
+    currentPlan = null;
+    savePlan();
+    broadcast("plan:cleared", {});
+    return res.json({ ok: true, plan: null });
+  }
+  currentPlan = {
+    ...currentPlan,
+    id: crypto.randomUUID(),
+    title: "Tablero",
+    goal: "",
+    createdAt: new Date().toISOString(),
+    steps: kept,
+  };
+  planChanged();
+  res.json({ ok: true, plan: currentPlan });
 });
 
 // ---- Runs ----
@@ -1767,6 +1866,92 @@ app.delete("/api/notes", (req, res) => {
   const next = done === true ? items.filter((i) => !i.done) : items.filter((i) => i.id !== id);
   if (next.length === items.length) return res.json(notesView(dir));
   writeNotes(dir, next, res);
+});
+
+// ---- Hooks de Claude Code ----
+// Devuelve la sesión de Claude activa en la carpeta del plan; sin proyecto, solo
+// si hay una única sesión abierta, para no adivinar a cuál mandarle las tarjetas.
+function cardsSession() {
+  const live = [...sessions.values()].filter((s) => s.kind === "claude" && !s.exited);
+  if (currentPlan?.project) return live.find((s) => s.cwd === currentPlan.project) || null;
+  return live.length === 1 ? live[0] : null;
+}
+
+// Genera el prompt de tarjetas para Claude si esa es su sesión y la opción está activa.
+// Marca las tarjetas como entregadas y actualiza el estado del plan.
+function takeCardsPrompt(session) {
+  if (config.claude_card_prompts === false || session !== cardsSession()) return "";
+  const cards = inbox.pendingCards(currentPlan);
+  if (!cards.length) return "";
+  inbox.markDelivered(cards);
+  planChanged();
+  return inbox.cardsPrompt(cards, { port: PORT });
+}
+
+// Solo tras un DELETE /api/plan de Claude, y una sola vez: el aviso se consume al leerlo.
+function takeNotesPrompt(session) {
+  if (!session.askNotes) return "";
+  session.askNotes = false;
+  return inbox.notesPrompt(notes[session.cwd]?.items);
+}
+
+// Teclea las tarjetas en la sesión si Claude está parado. El estado "typing" evita
+// teclearlas dos veces; el Enter va 150 ms después del pegado para que no forme
+// parte de él, y a los 5 s vuelve a idle por si el envío no disparó UserPromptSubmit.
+function offerCards(delayMs = 300) {
+  const s = cardsSession();
+  if (!s || s.claudeState !== "idle" || config.claude_card_prompts === false) return;
+  if (!inbox.pendingCards(currentPlan).length) return;
+  s.claudeState = "typing";
+  setTimeout(() => {
+    if (s.exited || s.claudeState !== "typing") return;
+    const text = takeCardsPrompt(s);
+    if (!text) {
+      s.claudeState = "idle";
+      return;
+    }
+    s.proc.write(inbox.asPaste(text));
+    setTimeout(() => !s.exited && s.proc.write("\r"), 150);
+    setTimeout(() => s.claudeState === "typing" && (s.claudeState = "idle"), 5000);
+  }, delayMs);
+}
+
+const hookSession = (req) => {
+  const s = sessions.get(String(req.query.session || ""));
+  return s && s.kind === "claude" && !s.exited ? s : null;
+};
+
+// Claude ya espera entrada. El retardo deja que su interfaz termine de arrancar
+// antes de teclear las tarjetas que estuvieran esperando.
+app.post("/api/hooks/session-start", (req, res) => {
+  const s = hookSession(req);
+  if (s) {
+    s.claudeState = "idle";
+    offerCards(1500);
+  }
+  res.status(204).end();
+});
+
+// Cambia el estado de la sesión a "busy" cuando se recibe un prompt de usuario.
+// Mientras está ocupada, las tarjetas esperan al hook Stop.
+app.post("/api/hooks/user-prompt", (req, res) => {
+  const s = hookSession(req);
+  if (s) s.claudeState = "busy";
+  res.status(204).end();
+});
+
+// Claude terminó su turno. Responder {decision:"block", reason} le hace seguir con
+// ese texto en vez de pararse: primero las tarjetas, luego las notas.
+app.post("/api/hooks/stop", (req, res) => {
+  const s = hookSession(req);
+  if (!s) return res.status(204).end();
+  const reason = takeCardsPrompt(s) || takeNotesPrompt(s);
+  if (reason) {
+    s.claudeState = "busy";
+    return res.json({ decision: "block", reason });
+  }
+  s.claudeState = "idle";
+  res.status(204).end();
 });
 
 // ---- Terminal ----

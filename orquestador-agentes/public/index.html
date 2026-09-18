@@ -258,6 +258,20 @@
             <input id="cfgWeeklyLimit" type="text" class="mono" />
             <div class="help">Contra estos topes se miden las dos barras de TOKENS DE CLAUDE CODE. Se escriben como 100M o como 100000000; con 0 la barra desaparece.</div>
           </div>
+          <div>
+            <label class="field-label">SESIONES DE CLAUDE CODE</label>
+            <label class="toggle">
+              <input type="checkbox" id="cfgRemoteControl" />
+              <span class="track"></span>
+              <span class="tlabel">REMOTE CONTROL (/RC) Y CAFFEINATE AL ABRIR</span>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="cfgCardPrompts" />
+              <span class="track"></span>
+              <span class="tlabel">MANDAR MIS TARJETAS DEL TABLERO A CLAUDE</span>
+            </label>
+            <div class="help">Remote Control se aplica a las sesiones que se abran después de guardar. Las tarjetas escritas o movidas a mano llegan a Claude al terminar su turno, o escritas en la sesión si está parado.</div>
+          </div>
           <div class="info-box">
             <span class="field-label">ESTADO DEL SERVIDOR</span>
             <div class="info-row"><span class="muted">Modelos disponibles</span><span class="mono" id="infoModels">—</span></div>
