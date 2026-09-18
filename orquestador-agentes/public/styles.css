@@ -1062,7 +1062,11 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
   background: var(--panel); border: 1px solid var(--border-soft); border-radius: 8px;
 }
 .note:hover { border-color: var(--border); }
-.note input[type="checkbox"] { margin: 2px 0 0; accent-color: var(--accent); cursor: pointer; flex: none; }
+/* Se establece ancho y padding específico para evitar que la casilla herede el ancho de la fila y mantenga el tamaño adecuado para el diseño de notas. */
+.note input[type="checkbox"] {
+  width: 14px; height: 14px; padding: 0; margin: 2px 0 0; border: 0; background: none;
+  accent-color: var(--accent); cursor: pointer; flex: none;
+}
 .note-text {
   flex: 1; min-width: 0; font-size: 12px; line-height: 1.5; color: var(--text-2);
   white-space: pre-wrap; overflow-wrap: anywhere; cursor: text;
